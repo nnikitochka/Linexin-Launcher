@@ -1820,6 +1820,7 @@ Kicker.DashboardWindow {
         // flies from wherever it was let go to the slot it will occupy, and the
         // write lands with it so the grid never shows an intermediate state.
         function ejectToDashboard(folderIndex, appIndex, icon, fromX, fromY, targetLandIndex) {
+            var wasFolderOpen = openFolderIndex === folderIndex;
             var plan = planMoveAppOutOfFolder(folderIndex, appIndex, targetLandIndex);
             if (!plan) return;
 
@@ -1834,7 +1835,9 @@ Kicker.DashboardWindow {
             });
             // The rebuild can shift the folder's row; follow it so the popup
             // keeps showing the folder the user is actually looking at.
-            openFolderIndex = plan.folderSurvives ? plan.folderIndex : -1;
+            if (wasFolderOpen) {
+                openFolderIndex = plan.folderSurvives ? plan.folderIndex : -1;
+            }
 
             folderFx.fly(icon, fromX, fromY, to.x, to.y, dur, 1.0, false);
         }
@@ -4835,6 +4838,9 @@ animatedEntrance: true
                                     width: enlargedGrid.slotWidth
                                     height: enlargedGrid.slotHeight
 
+                                    // Fill the slot without rounding down to a standard icon size.
+                                    readonly property real previewIconSize: Math.max(1, Math.floor(Math.min(width, height) - 4))
+
                                     readonly property int subIndex: index
                                     readonly property bool isOverflowSlot: index === 8 && enlargedGrid.hasOverflow
                                     readonly property var subApp: (!isOverflowSlot && dashDelegate.folderAppsList && index < dashDelegate.folderAppsList.count) ? dashDelegate.folderAppsList.get(index) : null
@@ -4863,9 +4869,10 @@ animatedEntrance: true
                                     Kirigami.Icon {
                                         visible: !enlargedAppSlot.isOverflowSlot
                                         anchors.centerIn: parent
-                                        width: Math.min(enlargedAppSlot.slotWidth * 0.76, enlargedAppSlot.slotHeight * 0.76, root.iconSize)
+                                        width: enlargedAppSlot.previewIconSize
                                         height: width
                                         source: enlargedAppSlot.slotIcon
+                                        roundToIconSize: false
                                         animated: false
                                     }
 
@@ -4873,7 +4880,7 @@ animatedEntrance: true
                                     Rectangle {
                                         visible: enlargedAppSlot.isOverflowSlot
                                         anchors.centerIn: parent
-                                        width: Math.min(enlargedAppSlot.slotWidth * 0.76, enlargedAppSlot.slotHeight * 0.76, root.iconSize)
+                                        width: enlargedAppSlot.previewIconSize
                                         height: width
                                         radius: width / 2
                                         color: root.colorWithAlpha(Kirigami.Theme.textColor, 0.15)
