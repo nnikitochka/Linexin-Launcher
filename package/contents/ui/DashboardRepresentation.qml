@@ -4222,7 +4222,12 @@ animatedEntrance: true
                     property bool isFolder: model.type === "folder"
                     property bool isEnlarged: isFolder && model.enlarged === true
                     property int parentFolderIndex: model.parentFolderIndex !== undefined ? model.parentFolderIndex : -1
-                    readonly property var folderAppsList: (isFolder && model.apps) ? model.apps : null
+                    readonly property var folderAppsList: {
+                        var rev = rootItem.folderRevision;
+                        if (!isFolder || itemIndex < 0 || itemIndex >= dashboardModel.count) return null;
+                        var item = dashboardModel.get(itemIndex);
+                        return (item && item.apps) ? item.apps : ((model && model.apps) ? model.apps : null);
+                    }
 
                     width: isEnlarged ? dashboardGrid.cellWidth * 2 : dashboardGrid.cellWidth
                     height: isEnlarged ? dashboardGrid.cellHeight * 2 : dashboardGrid.cellHeight
@@ -4719,7 +4724,7 @@ animatedEntrance: true
                         radius: Kirigami.Units.cornerRadius * 2
                         color: root.colorWithAlpha(root.bgColor, 0.78)
                         border.width: 1
-                        border.color: (dashMA.containsMouse || dashboardGrid.currentIndex === dashDelegate.itemIndex)
+                        border.color: (cardPlateMA.containsMouse || dashboardGrid.currentIndex === dashDelegate.itemIndex)
                                       ? root.colorWithAlpha(Kirigami.Theme.highlightColor, 0.5)
                                       : root.colorWithAlpha(Kirigami.Theme.textColor, 0.15)
 
@@ -4738,9 +4743,27 @@ animatedEntrance: true
                             ColorAnimation { duration: 150 }
                         }
 
+                        // Background click handler for enlarged folder card (opens popup on left click, context menu on right click)
+                        MouseArea {
+                            id: cardPlateMA
+                            anchors.fill: parent
+                            z: 0
+                            hoverEnabled: true
+                            acceptedButtons: Qt.LeftButton | Qt.RightButton
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: mouse => {
+                                if (mouse.button === Qt.RightButton) {
+                                    dashDelegate.openContextMenu(mouse.x, mouse.y);
+                                } else {
+                                    dashDelegate.activate(false);
+                                }
+                            }
+                        }
+
                         // Header with folder title and open indicator
                         Item {
                             id: enlargedHeader
+                            z: 1
                             anchors.top: parent.top
                             anchors.left: parent.left
                             anchors.right: parent.right
@@ -4778,6 +4801,7 @@ animatedEntrance: true
                         // 2x2 Grid of applications inside the enlarged folder
                         Grid {
                             id: enlargedGrid
+                            z: 2
                             anchors.top: enlargedHeader.bottom
                             anchors.bottom: parent.bottom
                             anchors.left: parent.left
@@ -4907,8 +4931,8 @@ animatedEntrance: true
                                             } else {
                                                 if (enlargedAppSlot.isOverflowSlot) {
                                                     dashDelegate.activate(false);
-                                                } else {
-                                                    root.launchAppFromItem(enlargedAppSlot.slotDesktopFile, enlargedAppSlot);
+                                                } else if (enlargedAppSlot.slotDesktopFile !== "") {
+                                                    launchAppFromItem(enlargedAppSlot.slotDesktopFile, enlargedAppSlot);
                                                 }
                                             }
                                         }
@@ -4920,6 +4944,7 @@ animatedEntrance: true
 
                     MouseArea {
                         id: dashMA
+                        enabled: !dashDelegate.isEnlarged
                         anchors.fill: parent
                         hoverEnabled: true
                         preventStealing: true
