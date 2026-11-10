@@ -202,10 +202,7 @@ Kicker.DashboardWindow {
             isClosing = false;
             stayOnTop();
             // Clear any in-flight launch zoom so an interrupted launch can't
-            // leave the board scaled up on the next open. Flush first: stopping
-            // the animation skips its onFinished, which would otherwise strand
-            // a queued app and silently swallow the launch.
-            flushPendingLaunch();
+            // leave the board scaled up on the next open.
             appLaunchAnimation.stop();
             launchScale.xScale = 1.0;
             launchScale.yScale = 1.0;
@@ -425,30 +422,11 @@ Kicker.DashboardWindow {
         closeAnimation.start();
     }
 
-    // Desktop file waiting on the launch animation. Spawning the process is
-    // held back until the zoom has finished: kstart plus the app's own startup
-    // (DBus activation, first window mapping, the compositor's map effect) all
-    // land on the same thread that drives this animation, and starting it up
-    // front stutters the dive right where it should be smoothest. A frame or
-    // two of extra latency is invisible; the hitch was not.
-    property string pendingLaunchDesktopFile: ""
-
-    function flushPendingLaunch() {
-        if (root.pendingLaunchDesktopFile === "") {
-            return;
-        }
-        var df = root.pendingLaunchDesktopFile;
-        root.pendingLaunchDesktopFile = "";
-        rootItem.launchDesktopFile(df);
-    }
-
     // Zoom-into-app launch: the whole board dives toward the activated icon and
     // dissolves, so opening an app reads distinctly from dismissing it. Falls
     // back to the plain close when the effect is switched off in settings.
     function launchWithZoom(cx, cy) {
         if (root.appLaunchDuration <= 0) {
-            // No zoom to protect — launch straight away.
-            flushPendingLaunch();
             closeWithAnimation();
             return;
         }
@@ -461,7 +439,6 @@ Kicker.DashboardWindow {
     // Convenience: zoom out from the centre of the delegate that was activated.
     function launchZoomFromItem(item) {
         if (!item) {
-            flushPendingLaunch();
             closeWithAnimation();
             return;
         }
@@ -469,10 +446,12 @@ Kicker.DashboardWindow {
         launchWithZoom(c.x, c.y);
     }
 
-    // Queue the app, then play the dive; flushPendingLaunch() spawns it once
-    // the animation is done (or immediately if the effect is switched off).
+    // Dispatch the launch immediately; the closing effect must not add its
+    // duration to application startup. Ignore repeat clicks while closing.
     function launchAppFromItem(desktopFile, item) {
-        root.pendingLaunchDesktopFile = desktopFile ? String(desktopFile) : "";
+        if (root.isClosing || !desktopFile) return;
+        root.isClosing = true;
+        rootItem.launchDesktopFile(String(desktopFile));
         launchZoomFromItem(item);
     }
 
@@ -747,7 +726,6 @@ Kicker.DashboardWindow {
                 launchScale.yScale = 1.0;
                 launchScale.origin.x = rootItem.width / 2;
                 launchScale.origin.y = rootItem.height / 2;
-                root.flushPendingLaunch();
                 root.toggle();
             }
         }
@@ -1462,7 +1440,7 @@ Kicker.DashboardWindow {
                         icon: sourceApp.icon
                     });
                 }
-                return {type: "folder", name: item.name, apps: folderApps, enlarged: (item.enlarged === true)};
+                return {type: "folder", name: item.name, apps: folderApps, enlarged: (item.enlarged === true), lockedPosition: (item.lockedPosition >= 0 ? item.lockedPosition : -1)};
             }
 
             var appUrl = canonicalApplicationUrl(item.desktopFile);
@@ -1564,7 +1542,7 @@ Kicker.DashboardWindow {
                     if (folderApps.length !== item.apps.length) {
                         removedFromFolder = true;
                         if (folderApps.length > 1) {
-                            apps.push({type: "folder", name: item.name, apps: folderApps, enlarged: (item.enlarged === true)});
+                            apps.push({type: "folder", name: item.name, apps: folderApps, enlarged: (item.enlarged === true), lockedPosition: (item.lockedPosition >= 0 ? item.lockedPosition : -1)});
                         } else if (folderApps.length === 1) {
                             apps.push({
                                 type: "app",
@@ -1764,7 +1742,7 @@ Kicker.DashboardWindow {
                 } else {
                     folderApps.push({desktopFile: itemB.desktopFile, name: itemB.name, icon: itemB.icon});
                 }
-                apps[indexA] = {type: "folder", name: itemA.name, apps: folderApps, enlarged: (itemA.enlarged === true)};
+                apps[indexA] = {type: "folder", name: itemA.name, apps: folderApps, enlarged: (itemA.enlarged === true), lockedPosition: (itemA.lockedPosition >= 0 ? itemA.lockedPosition : -1)};
                 apps.splice(indexB, 1);
                 keptIdx = indexB < indexA ? indexA - 1 : indexA;
             }
@@ -1773,7 +1751,7 @@ Kicker.DashboardWindow {
                 folderApps = (itemB.apps || []).slice();
                 var insertAt = itemB.enlarged === true ? folderApps.length : 0;
                 folderApps.splice(insertAt, 0, {desktopFile: itemA.desktopFile, name: itemA.name, icon: itemA.icon});
-                apps[indexB] = {type: "folder", name: itemB.name, apps: folderApps, enlarged: (itemB.enlarged === true)};
+                apps[indexB] = {type: "folder", name: itemB.name, apps: folderApps, enlarged: (itemB.enlarged === true), lockedPosition: (itemB.lockedPosition >= 0 ? itemB.lockedPosition : -1)};
                 apps.splice(indexA, 1);
                 keptIdx = indexA < indexB ? indexB - 1 : indexB;
             }
@@ -1795,7 +1773,9 @@ Kicker.DashboardWindow {
                 isNew = true;
             }
 
-            return {apps: apps, folderIndex: keptIdx, isNew: isNew};
+            var resultingFolder = apps[keptIdx];
+            var layout = layoutDashboardItems(apps.filter(function(entry) { return entry.type !== "folder_spacer"; }));
+            return {apps: apps, folderIndex: layout.indexOf(resultingFolder), isNew: isNew};
         }
 
         function renameFolder(folderIndex, newName) {
@@ -1811,7 +1791,16 @@ Kicker.DashboardWindow {
             var folder = apps[folderIndex];
             if (!folder || folder.type !== "folder") return;
             folder.enlarged = !(folder.enlarged === true);
+            if (!folder.enlarged) folder.lockedPosition = -1;
             apps[folderIndex] = folder;
+            saveFromArray(apps);
+        }
+
+        function toggleFolderPositionLocked(folderIndex) {
+            var apps = modelToArray();
+            var folder = apps[folderIndex];
+            if (!folder || folder.type !== "folder" || !folder.enlarged) return;
+            folder.lockedPosition = folder.lockedPosition >= 0 ? -1 : folderIndex;
             saveFromArray(apps);
         }
 
@@ -1972,7 +1961,7 @@ Kicker.DashboardWindow {
                             folderApps.push({desktopFile: sub.desktopFile, name: sub.name, icon: sub.icon});
                         }
                     }
-                    arr.push({type: "folder", name: item.name, desktopFile: "", icon: "", apps: folderApps, enlarged: (item.enlarged === true)});
+                    arr.push({type: "folder", name: item.name, desktopFile: "", icon: "", apps: folderApps, enlarged: (item.enlarged === true), lockedPosition: (item.lockedPosition >= 0 ? item.lockedPosition : -1)});
                 } else if (item.type === "folder_spacer") {
                     arr.push({type: "folder_spacer", parentFolderIndex: item.parentFolderIndex !== undefined ? item.parentFolderIndex : -1});
                 } else {
@@ -2005,6 +1994,37 @@ Kicker.DashboardWindow {
                 return isSlotFree(s0) && isSlotFree(s1) && isSlotFree(s2) && isSlotFree(s3);
             }
 
+            function placeEnlarged(item, slot) {
+                grid[slot] = item;
+                grid[slot + 1] = {type: "folder_spacer", parentFolderIndex: slot};
+                grid[slot + cols] = {type: "folder_spacer", parentFolderIndex: slot};
+                grid[slot + cols + 1] = {type: "folder_spacer", parentFolderIndex: slot};
+            }
+
+            // Reserve locked folders before packing anything else. On a grid
+            // resize, keep valid anchors first, then find safe places for those
+            // that no longer fit. Retain the saved anchor for the original grid.
+            var displacedLocks = [];
+            if (cols >= 2 && rowsPerPage >= 2) {
+                unplaced = [];
+                for (var p = 0; p < items.length; ++p) {
+                    var fixed = items[p];
+                    if (fixed.type === "folder" && fixed.enlarged
+                            && Number.isInteger(fixed.lockedPosition) && fixed.lockedPosition >= 0) {
+                        if (canFitEnlargedAt(fixed.lockedPosition)) placeEnlarged(fixed, fixed.lockedPosition);
+                        else displacedLocks.push(fixed);
+                    } else {
+                        unplaced.push(fixed);
+                    }
+                }
+                for (var d = 0; d < displacedLocks.length; ++d) {
+                    var displaced = displacedLocks[d];
+                    var fallback = displaced.lockedPosition;
+                    while (!canFitEnlargedAt(fallback)) ++fallback;
+                    placeEnlarged(displaced, fallback);
+                }
+            }
+
             var currentSlot = 0;
             while (unplaced.length > 0) {
                 while (!isSlotFree(currentSlot)) {
@@ -2015,10 +2035,7 @@ Kicker.DashboardWindow {
                 if (nextItem.type === "folder" && nextItem.enlarged && cols >= 2 && rowsPerPage >= 2) {
                     if (canFitEnlargedAt(currentSlot)) {
                         unplaced.shift();
-                        grid[currentSlot] = nextItem;
-                        grid[currentSlot + 1] = { type: "folder_spacer", parentFolderIndex: currentSlot };
-                        grid[currentSlot + cols] = { type: "folder_spacer", parentFolderIndex: currentSlot };
-                        grid[currentSlot + cols + 1] = { type: "folder_spacer", parentFolderIndex: currentSlot };
+                        placeEnlarged(nextItem, currentSlot);
                         currentSlot++;
                     } else {
                         var singleIdx = -1;
@@ -2050,7 +2067,8 @@ Kicker.DashboardWindow {
         function planDashboardMove(fromIndex, targetIndex) {
             var slots = modelToArray();
             var item = slots[fromIndex];
-            if (!item || item.type === "folder_spacer" || targetIndex < 0) return null;
+            if (!item || item.type === "folder_spacer" || targetIndex < 0
+                    || (item.type === "folder" && item.enlarged && item.lockedPosition >= 0)) return null;
             if (targetIndex < slots.length && slots[targetIndex].type === "folder_spacer"
                     && slots[targetIndex].parentFolderIndex >= 0) {
                 targetIndex = slots[targetIndex].parentFolderIndex;
@@ -2095,7 +2113,7 @@ Kicker.DashboardWindow {
         // only to remember the slot the user left the app in.
         function persistedItem(item) {
             if (item.type === "folder") {
-                return {type: "folder", name: item.name, apps: item.apps, enlarged: (item.enlarged === true)};
+                return {type: "folder", name: item.name, apps: item.apps, enlarged: (item.enlarged === true), lockedPosition: (item.lockedPosition >= 0 ? item.lockedPosition : -1)};
             }
             if (item.type === "auto") {
                 return {type: "auto", desktopFile: item.desktopFile};
@@ -2180,7 +2198,7 @@ Kicker.DashboardWindow {
                             folderApps.push({desktopFile: sub.desktopFile, name: sub.name, icon: sub.icon});
                         }
                     }
-                    apps.push({type: "folder", name: item.name, apps: folderApps, enlarged: (item.enlarged === true)});
+                    apps.push({type: "folder", name: item.name, apps: folderApps, enlarged: (item.enlarged === true), lockedPosition: (item.lockedPosition >= 0 ? item.lockedPosition : -1)});
                 } else {
                     apps.push(rootItem.persistedItem(item));
                 }
@@ -2227,7 +2245,7 @@ Kicker.DashboardWindow {
                             desktopFile: "",
                             icon: "",
                             apps: subApps,
-                            enlarged: (item.enlarged === true)
+                            enlarged: (item.enlarged === true), lockedPosition: (item.lockedPosition >= 0 ? item.lockedPosition : -1)
                         });
                     } else if (item.type === "auto") {
                         var autoUrl = rootItem.canonicalApplicationUrl(item.desktopFile)
@@ -2294,7 +2312,7 @@ Kicker.DashboardWindow {
                             desktopFile: "",
                             icon: "",
                             apps: [],
-                            enlarged: (gItem.enlarged === true),
+                            enlarged: (gItem.enlarged === true), lockedPosition: (gItem.lockedPosition >= 0 ? gItem.lockedPosition : -1),
                             parentFolderIndex: -1
                         };
                         append(fEntry);
@@ -2416,6 +2434,7 @@ Kicker.DashboardWindow {
             property string desktopFile: ""
             property bool isFolder: false
             property bool isEnlarged: false
+            property bool positionLocked: false
             property bool isAutoItem: false
             // Set when the menu was opened on an app inside an open folder
             // rather than on a dashboard tile. Everything below the first
@@ -2501,6 +2520,16 @@ Kicker.DashboardWindow {
                     var idx = dashContextMenu.folderIdx;
                     dashContextMenu.close();
                     rootItem.toggleFolderEnlarged(idx);
+                }
+            }
+            PlasmaExtras.MenuItem {
+                text: dashContextMenu.positionLocked ? i18n("Unlock Folder Position") : i18n("Lock Folder Position")
+                icon: dashContextMenu.positionLocked ? "object-unlocked" : "object-locked"
+                visible: dashContextMenu.isFolder && dashContextMenu.isEnlarged
+                onClicked: {
+                    var idx = dashContextMenu.folderIdx;
+                    dashContextMenu.close();
+                    rootItem.toggleFolderPositionLocked(idx);
                 }
             }
             PlasmaExtras.MenuItem {
@@ -4545,6 +4574,7 @@ animatedEntrance: true
                     property bool isFolder: model.type === "folder"
                     property bool isEnlarged: isFolder && model.enlarged === true
                                               && root.columns >= 2 && root.dashRows >= 2
+                    readonly property bool positionLocked: isEnlarged && model.lockedPosition >= 0
                     property int parentFolderIndex: model.parentFolderIndex !== undefined ? model.parentFolderIndex : -1
                     readonly property var folderAppsList: {
                         var rev = rootItem.folderRevision;
@@ -4585,6 +4615,7 @@ animatedEntrance: true
                         if (isFolder) {
                             dashContextMenu.isFolder = true;
                             dashContextMenu.isEnlarged = isEnlarged;
+                            dashContextMenu.positionLocked = positionLocked;
                             dashContextMenu.isAutoItem = false;
                             dashContextMenu.folderIdx = itemIndex;
                             dashContextMenu.desktopFile = "";
@@ -5164,6 +5195,13 @@ animatedEntrance: true
                                 if (pressX < 0) return;
                                 var dx = mouse.x - pressX;
                                 var dy = mouse.y - pressY;
+                                if (dashDelegate.positionLocked) {
+                                    if (dx * dx + dy * dy > 400) {
+                                        pressX = -1;
+                                        pressY = -1;
+                                    }
+                                    return;
+                                }
                                 if (!dragging && dx * dx + dy * dy > 400) {
                                     dragging = true;
                                     dashboardGrid.dragFromIndex = dashDelegate.itemIndex;
@@ -5183,6 +5221,7 @@ animatedEntrance: true
                             }
                             onReleased: mouse => {
                                 var wasDragging = dragging;
+                                var wasPressed = pressX >= 0;
                                 var from = dashboardGrid.dragFromIndex;
                                 var target = dashboardGrid.folderDropIndex;
                                 pressX = -1;
@@ -5192,7 +5231,7 @@ animatedEntrance: true
                                     dragGhost.visible = false;
                                     dashboardGrid.endDrag();
                                     rootItem.moveDashboardItem(from, target);
-                                } else if (mouse.button === Qt.LeftButton) {
+                                } else if (wasPressed && mouse.button === Qt.LeftButton) {
                                     dashDelegate.activate(false);
                                 }
                             }
@@ -5213,6 +5252,24 @@ animatedEntrance: true
                             RowLayout {
                                 anchors.fill: parent
                                 spacing: Kirigami.Units.smallSpacing
+
+                                PlasmaComponents.ToolButton {
+                                    id: folderPositionLockButton
+                                    Layout.preferredWidth: enlargedHeader.height
+                                    Layout.fillHeight: true
+                                    padding: 2
+                                    icon.name: dashDelegate.positionLocked ? "object-locked" : "object-unlocked"
+                                    icon.width: 16
+                                    icon.height: 16
+                                    text: dashDelegate.positionLocked ? i18n("Unlock Folder Position") : i18n("Lock Folder Position")
+                                    display: AbstractButton.IconOnly
+                                    Accessible.checkable: true
+                                    Accessible.checked: dashDelegate.positionLocked
+                                    onClicked: rootItem.toggleFolderPositionLocked(dashDelegate.itemIndex)
+                                    ToolTip.text: text
+                                    ToolTip.visible: hovered
+                                    ToolTip.delay: 400
+                                }
 
                                 PlasmaComponents.Label {
                                     text: model.name || i18n("Folder")

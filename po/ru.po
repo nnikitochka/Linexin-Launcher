@@ -25,6 +25,12 @@ msgstr "Основное"
 msgid "Panel icon:"
 msgstr "Значок панели:"
 
+msgid "Lock Folder Position"
+msgstr "Закрепить положение папки"
+
+msgid "Unlock Folder Position"
+msgstr "Открепить положение папки"
+
 msgctxt "@item:inmenu Open icon chooser dialog"
 msgid "Choose…"
 msgstr "Выбрать…"
