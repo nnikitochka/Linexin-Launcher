@@ -1751,6 +1751,31 @@ Kicker.DashboardWindow {
             }
         }
 
+        function createFolderFromApp(index) {
+            var apps = modelToArray();
+            var item = apps[index];
+            if (!item || item.type === "folder") return;
+
+            var folder = {
+                type: "folder",
+                name: i18n("New Folder"),
+                apps: [{
+                    desktopFile: item.desktopFile,
+                    name: item.name,
+                    icon: item.icon
+                }]
+            };
+            apps[index] = folder;
+            saveFromArray(apps);
+
+            folderPopup.originX = rootItem.width / 2;
+            folderPopup.originY = rootItem.height / 2;
+            folderPopup.originW = root.iconSize * 0.85 + 8;
+            folderPopup.originH = root.iconSize * 0.85 + 8;
+            openFolderIndex = index;
+            folderPopup.startRename();
+        }
+
         // Centre of grid cell `idx`, in root coordinates.
         //
         // Worked out from the grid's fixed cell geometry rather than by asking
@@ -2096,6 +2121,7 @@ Kicker.DashboardWindow {
             property bool isFolderItem: false
             property int folderIdx: -1
             property int appIndex: -1
+            property int itemIndex: -1
             property string appName: ""
             property string appIcon: ""
 
@@ -2142,6 +2168,19 @@ Kicker.DashboardWindow {
                     }
                 }
             }
+            PlasmaExtras.MenuItem {
+                text: i18n("New Folder")
+                icon: "folder-new"
+                visible: !dashContextMenu.isFolder && !dashContextMenu.isFolderItem
+                onClicked: {
+                    var idx = dashContextMenu.itemIndex;
+                    dashContextMenu.close();
+                    if (idx >= 0) {
+                        rootItem.createFolderFromApp(idx);
+                    }
+                }
+            }
+
             PlasmaExtras.MenuItem {
                 text: i18n("Pin to Dashboard")
                 icon: "pin"
@@ -2531,7 +2570,7 @@ Kicker.DashboardWindow {
         // Timer for folder merge readiness — hold over another icon to arm
         Timer {
             id: folderMergeTimer
-            interval: 600
+            interval: 200
             repeat: false
             property int targetIndex: -1
             onTriggered: {
@@ -4022,6 +4061,7 @@ animatedEntrance: true
                     Accessible.onPressAction: activate(true)
 
                     function openContextMenu(x, y) {
+                        dashContextMenu.itemIndex = itemIndex;
                         dashContextMenu.isFolderItem = false;
                         dashContextMenu.appIndex = -1;
                         if (isFolder) {
@@ -4524,11 +4564,11 @@ animatedEntrance: true
                                 dragging = false;
                                 dragGhost.visible = false;
 
-                                if (dashboardGrid.readyToMerge && dashboardGrid.hoverTargetIndex !== -1
-                                    && dashboardGrid.hoverTargetIndex !== dashboardGrid.dragFromIndex) {
-                                    // Held over a target long enough — merge into a folder.
+                                var targetIdx = dashboardGrid.hoverTargetIndex;
+                                if (targetIdx !== -1 && targetIdx !== dashboardGrid.dragFromIndex) {
+                                    // Released over a target icon/folder — merge into a folder.
                                     var plan = rootItem.planCreateFolder(dashboardGrid.dragFromIndex,
-                                                                         dashboardGrid.hoverTargetIndex);
+                                                                         targetIdx);
                                     dashboardGrid.endDrag();
                                     if (plan) {
                                         var dur = plan.isNew ? root.folderCreateDuration : root.folderAddDuration;
@@ -4610,16 +4650,12 @@ animatedEntrance: true
                                 // Cursor position within the hovered cell (0..1)
                                 var relX = (mapped.x - overItem.x) / dashboardGrid.cellWidth;
                                 var relY = (mapped.y - overItem.y) / dashboardGrid.cellHeight;
-                                var inCenter = relX > 0.30 && relX < 0.70 && relY > 0.30 && relY < 0.70;
+                                var inCenter = relX > 0.15 && relX < 0.85 && relY > 0.15 && relY < 0.85;
 
-                                // Has the cursor crossed past the hovered cell's centre,
-                                // heading away from the gap? A dot product against the
-                                // travel direction handles horizontal and row-changing
-                                // moves alike.
                                 var overCx = overItem.x + dashboardGrid.cellWidth / 2;
                                 var overCy = overItem.y + dashboardGrid.cellHeight / 2;
-                                var crossed = true;
                                 var fromItem = dashboardGrid.itemAtIndex(fromIdx);
+                                var crossed = true;
                                 if (fromItem) {
                                     var fromCx = fromItem.x + dashboardGrid.cellWidth / 2;
                                     var fromCy = fromItem.y + dashboardGrid.cellHeight / 2;
@@ -4628,29 +4664,26 @@ animatedEntrance: true
                                     crossed = dot > 0;
                                 }
 
-                                if (inCenter && !crossed) {
-                                    // Dwelling on the heart of another icon → offer a
-                                    // folder merge; the gap stays put so the target is a
-                                    // stable thing to drop onto.
+                                if (inCenter) {
+                                    // Dwelling on the icon → offer a folder merge;
+                                    // the target stays stable so the user can easily drop onto it.
                                     if (dashboardGrid.hoverTargetIndex !== overIdx) {
-                                        dashboardGrid.readyToMerge = false;
                                         dashboardGrid.hoverTargetIndex = overIdx;
+                                        dashboardGrid.readyToMerge = false;
                                         folderMergeTimer.targetIndex = overIdx;
                                         folderMergeTimer.restart();
                                     }
-                                } else if (crossed) {
-                                    // Passed the icon's centre → slide it aside and move
-                                    // the gap here so the grid previews the drop result.
-                                    dashboardGrid.hoverTargetIndex = -1;
-                                    dashboardGrid.readyToMerge = false;
-                                    folderMergeTimer.stop();
-                                    dashboardModel.move(fromIdx, overIdx, 1);
-                                    dashboardGrid.dragFromIndex = overIdx;
                                 } else {
-                                    // Approaching but not yet centred — hold steady
+                                    // Dragged away from the icon's center towards edges/gaps
                                     dashboardGrid.hoverTargetIndex = -1;
                                     dashboardGrid.readyToMerge = false;
                                     folderMergeTimer.stop();
+
+                                    if (crossed) {
+                                        // Passed the icon into the gap/edge → slide it aside to preview reorder
+                                        dashboardModel.move(fromIdx, overIdx, 1);
+                                        dashboardGrid.dragFromIndex = overIdx;
+                                    }
                                 }
                             }
                         }
@@ -5736,7 +5769,9 @@ animatedEntrance: true
                 return;
             }
             if (event.key === Qt.Key_Escape) {
-                if (root.searching) {
+                if (rootItem.openFolderIndex !== -1) {
+                    rootItem.openFolderIndex = -1;
+                } else if (root.searching) {
                     reset();
                 } else {
                     closeWithAnimation();
