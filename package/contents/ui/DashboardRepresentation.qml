@@ -1941,16 +1941,80 @@ Kicker.DashboardWindow {
             return arr;
         }
 
+        // Share packing between the saved grid and the drag preview.
+        function layoutDashboardItems(items) {
+            var unplaced = items.slice();
+            var cols = Math.max(1, root.columns);
+            var rowsPerPage = Math.max(1, root.dashRows);
+            var grid = [];
+
+            function isSlotFree(slot) {
+                return !grid[slot];
+            }
+
+            function canFitEnlargedAt(slot) {
+                var c = slot % cols;
+                var r = Math.floor(slot / cols);
+                var pr = r % rowsPerPage;
+                if (c >= cols - 1 || pr >= rowsPerPage - 1) return false;
+                var s0 = slot;
+                var s1 = slot + 1;
+                var s2 = slot + cols;
+                var s3 = slot + cols + 1;
+                return isSlotFree(s0) && isSlotFree(s1) && isSlotFree(s2) && isSlotFree(s3);
+            }
+
+            var currentSlot = 0;
+            while (unplaced.length > 0) {
+                while (!isSlotFree(currentSlot)) {
+                    currentSlot++;
+                }
+
+                var nextItem = unplaced[0];
+                if (nextItem.type === "folder" && nextItem.enlarged && cols >= 2 && rowsPerPage >= 2) {
+                    if (canFitEnlargedAt(currentSlot)) {
+                        unplaced.shift();
+                        grid[currentSlot] = nextItem;
+                        grid[currentSlot + 1] = { type: "folder_spacer", parentFolderIndex: currentSlot };
+                        grid[currentSlot + cols] = { type: "folder_spacer", parentFolderIndex: currentSlot };
+                        grid[currentSlot + cols + 1] = { type: "folder_spacer", parentFolderIndex: currentSlot };
+                        currentSlot++;
+                    } else {
+                        var singleIdx = -1;
+                        for (var k = 1; k < unplaced.length; k++) {
+                            if (!(unplaced[k].type === "folder" && unplaced[k].enlarged)) {
+                                singleIdx = k;
+                                break;
+                            }
+                        }
+                        if (singleIdx !== -1) {
+                            var singleItem = unplaced.splice(singleIdx, 1)[0];
+                            grid[currentSlot] = singleItem;
+                            currentSlot++;
+                        } else {
+                            grid[currentSlot] = { type: "folder_spacer", parentFolderIndex: -1 };
+                            currentSlot++;
+                        }
+                    }
+                } else {
+                    unplaced.shift();
+                    grid[currentSlot] = nextItem;
+                    currentSlot++;
+                }
+            }
+            return grid;
+        }
+
         // Reorder logical items, then let reload rebuild the 2x2 reservations.
-        function moveEnlargedFolder(fromIndex, targetIndex) {
+        function planDashboardMove(fromIndex, targetIndex) {
             var slots = modelToArray();
-            var folder = slots[fromIndex];
-            if (!folder || folder.type !== "folder" || targetIndex < 0) return false;
+            var item = slots[fromIndex];
+            if (!item || item.type === "folder_spacer" || targetIndex < 0) return null;
             if (targetIndex < slots.length && slots[targetIndex].type === "folder_spacer"
                     && slots[targetIndex].parentFolderIndex >= 0) {
                 targetIndex = slots[targetIndex].parentFolderIndex;
             }
-            if (targetIndex === fromIndex) return false;
+            if (targetIndex === fromIndex) return null;
 
             var items = [];
             var source = -1;
@@ -1959,9 +2023,10 @@ Kicker.DashboardWindow {
                 if (slots[i].type === "folder_spacer") continue;
                 if (i === fromIndex) source = items.length;
                 if (i === targetIndex) target = items.length;
+                slots[i].previewSourceIndex = i;
                 items.push(slots[i]);
             }
-            if (source < 0) return false;
+            if (source < 0) return null;
             // Empty slots use their position in the visible sequence.
             if (target < 0) {
                 target = 0;
@@ -1970,9 +2035,15 @@ Kicker.DashboardWindow {
                 }
                 if (target > source) target--;
             }
-            if (target === source) return false;
+            if (target === source) return null;
             items.splice(source, 1);
-            items.splice(Math.max(0, Math.min(target, items.length)), 0, folder);
+            items.splice(Math.max(0, Math.min(target, items.length)), 0, item);
+            return items;
+        }
+
+        function moveDashboardItem(fromIndex, targetIndex) {
+            var items = planDashboardMove(fromIndex, targetIndex);
+            if (!items) return false;
             saveFromArray(items);
             return true;
         }
@@ -2161,64 +2232,7 @@ Kicker.DashboardWindow {
                     }
                 }
 
-                var cols = Math.max(1, root.columns);
-                var rowsPerPage = Math.max(1, root.dashRows);
-                var grid = [];
-
-                function isSlotFree(slot) {
-                    return !grid[slot];
-                }
-
-                function canFitEnlargedAt(slot) {
-                    var c = slot % cols;
-                    var r = Math.floor(slot / cols);
-                    var pr = r % rowsPerPage;
-                    if (c >= cols - 1 || pr >= rowsPerPage - 1) return false;
-                    var s0 = slot;
-                    var s1 = slot + 1;
-                    var s2 = slot + cols;
-                    var s3 = slot + cols + 1;
-                    return isSlotFree(s0) && isSlotFree(s1) && isSlotFree(s2) && isSlotFree(s3);
-                }
-
-                var currentSlot = 0;
-                while (unplaced.length > 0) {
-                    while (!isSlotFree(currentSlot)) {
-                        currentSlot++;
-                    }
-
-                    var nextItem = unplaced[0];
-                    if (nextItem.type === "folder" && nextItem.enlarged && cols >= 2 && rowsPerPage >= 2) {
-                        if (canFitEnlargedAt(currentSlot)) {
-                            unplaced.shift();
-                            grid[currentSlot] = nextItem;
-                            grid[currentSlot + 1] = { type: "folder_spacer", parentFolderIndex: currentSlot };
-                            grid[currentSlot + cols] = { type: "folder_spacer", parentFolderIndex: currentSlot };
-                            grid[currentSlot + cols + 1] = { type: "folder_spacer", parentFolderIndex: currentSlot };
-                            currentSlot++;
-                        } else {
-                            var singleIdx = -1;
-                            for (var k = 1; k < unplaced.length; k++) {
-                                if (!(unplaced[k].type === "folder" && unplaced[k].enlarged)) {
-                                    singleIdx = k;
-                                    break;
-                                }
-                            }
-                            if (singleIdx !== -1) {
-                                var singleItem = unplaced.splice(singleIdx, 1)[0];
-                                grid[currentSlot] = singleItem;
-                                currentSlot++;
-                            } else {
-                                grid[currentSlot] = { type: "folder_spacer", parentFolderIndex: -1 };
-                                currentSlot++;
-                            }
-                        }
-                    } else {
-                        unplaced.shift();
-                        grid[currentSlot] = nextItem;
-                        currentSlot++;
-                    }
-                }
+                var grid = rootItem.layoutDashboardItems(unplaced);
 
                 for (var s = 0; s < grid.length; s++) {
                     var gItem = grid[s];
@@ -4160,8 +4174,92 @@ animatedEntrance: true
                 // re-binds delegates to data.
                 property bool dragActive: false
                 property int folderDropIndex: -1
+                property bool deferReorder: false
+                property var previewLayout: ({})
+                property int previewLandIndex: -1
+                onFolderDropIndexChanged: refreshDropPreview()
+                onReadyToMergeChanged: refreshDropPreview()
+
+                function refreshDropPreview() {
+                    var positions = {};
+                    var landing = -1;
+                    if (dragActive && deferReorder && !readyToMerge) {
+                        var plan = rootItem.planDashboardMove(dragFromIndex, folderDropIndex);
+                        if (plan) {
+                            var layout = rootItem.layoutDashboardItems(plan);
+                            for (var i = 0; i < layout.length; i++) {
+                                var item = layout[i];
+                                if (!item || item.type === "folder_spacer") continue;
+                                positions[item.previewSourceIndex] = i;
+                                if (item.previewSourceIndex === dragFromIndex) landing = i;
+                            }
+                        }
+                    }
+                    previewLayout = positions;
+                    previewLandIndex = landing;
+                }
                 property int hoverTargetIndex: -1  // for folder merge highlight
                 property bool readyToMerge: false   // armed after holding over target 600ms
+
+                // Resolve cells geometrically: indexAt() misses empty space and
+                // can return the large delegate over one of its reserved cells.
+                function updateDropTarget(x, y, allowMerge) {
+                    var target = -1;
+                    if (x >= 0 && x < width && y >= contentY && y < contentY + height) {
+                        var col = Math.floor(x / cellWidth);
+                        var row = Math.floor(y / cellHeight);
+                        if (col < root.columns) {
+                            target = Math.min(row * root.columns + col, dashboardModel.count);
+                            if (target < dashboardModel.count) {
+                                var slot = dashboardModel.get(target);
+                                if (slot.type === "folder_spacer" && slot.parentFolderIndex >= 0)
+                                    target = slot.parentFolderIndex;
+                            }
+                        }
+                    }
+                    folderDropIndex = target === dragFromIndex ? -1 : target;
+
+                    var mergeTarget = -1;
+                    var source = dashboardModel.get(dragFromIndex);
+                    if (allowMerge && source && source.type !== "folder"
+                            && folderDropIndex >= 0 && target < dashboardModel.count) {
+                        var item = dashboardModel.get(target);
+                        var span = item.type === "folder" && item.enlarged === true ? 2 : 1;
+                        var relX = (x - (target % root.columns) * cellWidth) / (cellWidth * span);
+                        var relY = (y - Math.floor(target / root.columns) * cellHeight) / (cellHeight * span);
+                        if (item.type !== "folder_spacer" && relX > 0.15 && relX < 0.85
+                                && relY > 0.15 && relY < 0.85) mergeTarget = target;
+                    }
+                    if (hoverTargetIndex !== mergeTarget) {
+                        hoverTargetIndex = mergeTarget;
+                        readyToMerge = false;
+                        folderMergeTimer.stop();
+                        if (mergeTarget >= 0) {
+                            folderMergeTimer.targetIndex = mergeTarget;
+                            folderMergeTimer.restart();
+                        }
+                    }
+                }
+
+                Rectangle {
+                    parent: dashboardGrid.contentItem
+                    z: 30
+                    visible: dashboardGrid.dragActive && dashboardGrid.previewLandIndex >= 0
+                             && !dashboardGrid.readyToMerge
+                    readonly property int span: {
+                        if (dashboardGrid.dragFromIndex < 0) return 1;
+                        var item = dashboardModel.get(dashboardGrid.dragFromIndex);
+                        return item && item.type === "folder" && item.enlarged === true ? 2 : 1;
+                    }
+                    x: (dashboardGrid.previewLandIndex % root.columns) * dashboardGrid.cellWidth + 4
+                    y: Math.floor(dashboardGrid.previewLandIndex / root.columns) * dashboardGrid.cellHeight + 4
+                    width: dashboardGrid.cellWidth * span - 8
+                    height: dashboardGrid.cellHeight * span - 8
+                    radius: Kirigami.Units.cornerRadius * 2
+                    color: root.colorWithAlpha(Kirigami.Theme.highlightColor, 0.18)
+                    border.width: 2
+                    border.color: Kirigami.Theme.highlightColor
+                }
 
                 // --- Folder choreography hand-off ---
                 // A folder write rebuilds every delegate, so the arrival beat is
@@ -4204,12 +4302,16 @@ animatedEntrance: true
                 // defers this until the flight lands, by which point the delegate
                 // that started the drag may already be gone.
                 function endDrag() {
+                    dragActive = false;
                     readyToMerge = false;
                     hoverTargetIndex = -1;
                     dragFromIndex = -1;
                     dragStartIndex = -1;
                     dragActive = false;
                     folderDropIndex = -1;
+                    deferReorder = false;
+                    previewLayout = ({});
+                    previewLandIndex = -1;
                 }
 
                 Timer {
@@ -4344,6 +4446,9 @@ animatedEntrance: true
                     visible: !isSpacer
                     z: isEnlarged ? (dashMA.containsMouse || dashboardGrid.currentIndex === itemIndex ? 10 : 5) : 1
 
+                    readonly property int previewIndex: dashboardGrid.previewLayout[itemIndex] !== undefined
+                                                       ? dashboardGrid.previewLayout[itemIndex] : itemIndex
+
                     property bool entranceComplete: root.iconEntranceDuration <= 0
                     Accessible.role: isSpacer ? Accessible.NoRole : Accessible.Button
                     Accessible.name: model.name || ""
@@ -4418,6 +4523,14 @@ animatedEntrance: true
                     // overlap the hover scale above without the two clobbering
                     // each other's bindings.
                     transform: [
+                        Translate {
+                            x: dashboardGrid.dragFromIndex === dashDelegate.itemIndex ? 0
+                               : ((dashDelegate.previewIndex % root.columns) - (dashDelegate.itemIndex % root.columns)) * dashboardGrid.cellWidth
+                            y: dashboardGrid.dragFromIndex === dashDelegate.itemIndex ? 0
+                               : (Math.floor(dashDelegate.previewIndex / root.columns) - Math.floor(dashDelegate.itemIndex / root.columns)) * dashboardGrid.cellHeight
+                            Behavior on x { NumberAnimation { duration: dashboardGrid.dragActive ? root.dragMoveDuration : 0 } }
+                            Behavior on y { NumberAnimation { duration: dashboardGrid.dragActive ? root.dragMoveDuration : 0 } }
+                        },
                         Scale {
                             id: fxDelegateScale
                             origin.x: dashDelegate.width / 2
@@ -4700,6 +4813,7 @@ animatedEntrance: true
                         border.width: 2
                         border.color: Kirigami.Theme.highlightColor
                         opacity: (dashboardGrid.dragActive
+                                  && dashboardGrid.previewLandIndex < 0
                                   && (dashboardGrid.folderDropIndex >= 0
                                       ? dashboardGrid.folderDropIndex === dashDelegate.itemIndex
                                       : dashboardGrid.dragFromIndex === dashDelegate.itemIndex)
@@ -4897,6 +5011,7 @@ animatedEntrance: true
                                     dashboardGrid.dragFromIndex = dashDelegate.itemIndex;
                                     dashboardGrid.dragStartIndex = dashDelegate.itemIndex;
                                     dashboardGrid.dragActive = true;
+                                    dashboardGrid.deferReorder = true;
                                     dragGhost.iconSource = "folder";
                                     dragGhost.labelText = model.name || i18n("Folder");
                                     dragGhost.visible = true;
@@ -4906,22 +5021,7 @@ animatedEntrance: true
                                 dragGhost.x = pos.x - dragGhost.width / 2;
                                 dragGhost.y = pos.y - dragGhost.height / 2;
                                 var gridPos = mapToItem(dashboardGrid.contentItem, mouse.x, mouse.y);
-                                var col = Math.floor(gridPos.x / dashboardGrid.cellWidth);
-                                var row = Math.floor(gridPos.y / dashboardGrid.cellHeight);
-                                if (col < 0 || col >= root.columns || row < 0
-                                        || gridPos.x >= dashboardGrid.width
-                                        || gridPos.y < dashboardGrid.contentY
-                                        || gridPos.y >= dashboardGrid.contentY + dashboardGrid.height) {
-                                    dashboardGrid.folderDropIndex = -1;
-                                    return;
-                                }
-                                var target = Math.min(row * root.columns + col, dashboardModel.count);
-                                if (target < dashboardModel.count) {
-                                    var slot = dashboardModel.get(target);
-                                    if (slot.type === "folder_spacer" && slot.parentFolderIndex >= 0)
-                                        target = slot.parentFolderIndex;
-                                }
-                                dashboardGrid.folderDropIndex = target;
+                                dashboardGrid.updateDropTarget(gridPos.x, gridPos.y, false);
                             }
                             onReleased: mouse => {
                                 var wasDragging = dragging;
@@ -4933,7 +5033,7 @@ animatedEntrance: true
                                 if (wasDragging) {
                                     dragGhost.visible = false;
                                     dashboardGrid.endDrag();
-                                    rootItem.moveEnlargedFolder(from, target);
+                                    rootItem.moveDashboardItem(from, target);
                                 } else if (mouse.button === Qt.LeftButton) {
                                     dashDelegate.activate(false);
                                 }
@@ -5007,8 +5107,8 @@ animatedEntrance: true
                                     width: enlargedGrid.slotWidth
                                     height: enlargedGrid.slotHeight
 
-                                    // Fill the slot without rounding down to a standard icon size.
-                                    readonly property real previewIconSize: Math.max(1, Math.floor(Math.min(width, height) - 4))
+                                    // Fill the slot without rounding down to a standard icon size (reduced by 10%).
+                                    readonly property real previewIconSize: Math.max(1, Math.floor((Math.min(width, height) - 4) * 0.9))
 
                                     readonly property int subIndex: index
                                     readonly property bool isOverflowSlot: index === 8 && enlargedGrid.hasOverflow
@@ -5255,6 +5355,20 @@ animatedEntrance: true
                         property int pressY: -1
                         property bool dragging: false
 
+                        onCanceled: {
+                            var reordered = dragging && !dashboardGrid.deferReorder
+                                            && dashboardGrid.dragFromIndex !== dashboardGrid.dragStartIndex;
+                            pressX = -1;
+                            pressY = -1;
+                            if (dragging) {
+                                dragging = false;
+                                dragGhost.visible = false;
+                                folderMergeTimer.stop();
+                                dashboardGrid.endDrag();
+                                if (reordered) rootItem.syncModelToConfig();
+                            }
+                        }
+
                         onPressed: mouse => {
                             if (dashDelegate.isSpacer) return;
                             if (mouse.button === Qt.RightButton) {
@@ -5279,6 +5393,8 @@ animatedEntrance: true
                                 dragGhost.visible = false;
 
                                 var targetIdx = dashboardGrid.hoverTargetIndex;
+                                if (dashboardGrid.deferReorder && !dashboardGrid.readyToMerge)
+                                    targetIdx = -1;
                                 if (targetIdx !== -1 && targetIdx !== dashboardGrid.dragFromIndex) {
                                     // Released over a target icon/folder — merge into a folder.
                                     var plan = rootItem.planCreateFolder(dashboardGrid.dragFromIndex,
@@ -5311,8 +5427,13 @@ animatedEntrance: true
                                     // order. Drag state cleared first, for the same
                                     // reason as above.
                                     var reordered = dashboardGrid.dragFromIndex !== dashboardGrid.dragStartIndex;
+                                    var deferred = dashboardGrid.deferReorder;
+                                    var from = dashboardGrid.dragFromIndex;
+                                    var dropIndex = dashboardGrid.folderDropIndex;
                                     dashboardGrid.endDrag();
-                                    if (reordered) {
+                                    if (deferred) {
+                                        rootItem.moveDashboardItem(from, dropIndex);
+                                    } else if (reordered) {
                                         rootItem.syncModelToConfig();
                                     }
                                 }
@@ -5333,6 +5454,18 @@ animatedEntrance: true
                                     dashboardGrid.dragFromIndex = dashDelegate.itemIndex;
                                     dashboardGrid.dragStartIndex = dashDelegate.itemIndex;
                                     dashboardGrid.dragActive = true;
+                                    // Moving a single model row would displace the
+                                    // reserved cells belonging to enlarged folders.
+                                    dashboardGrid.deferReorder = false;
+                                    if (root.columns >= 2 && root.dashRows >= 2) {
+                                        for (var i = 0; i < dashboardModel.count; i++) {
+                                            var entry = dashboardModel.get(i);
+                                            if (entry.type === "folder" && entry.enlarged === true) {
+                                                dashboardGrid.deferReorder = true;
+                                                break;
+                                            }
+                                        }
+                                    }
                                     if (dashDelegate.isFolder) {
                                         dragGhost.iconSource = "folder";
                                         dragGhost.labelText = model.name || i18n("Folder");
@@ -5349,6 +5482,10 @@ animatedEntrance: true
                                 dragGhost.y = globalPos.y - dragGhost.height / 2;
 
                                 var mapped = mapToItem(dashboardGrid.contentItem, mouse.x, mouse.y);
+                                if (dashboardGrid.deferReorder) {
+                                    dashboardGrid.updateDropTarget(mapped.x, mapped.y, true);
+                                    return;
+                                }
                                 var overIdx = dashboardGrid.indexAt(mapped.x, mapped.y);
                                 var fromIdx = dashboardGrid.dragFromIndex;
 
@@ -5356,6 +5493,7 @@ animatedEntrance: true
                                 // already occupies — nothing to do.
                                 if (overIdx === -1 || overIdx === fromIdx) {
                                     dashboardGrid.hoverTargetIndex = -1;
+                                    dashboardGrid.folderDropIndex = -1;
                                     dashboardGrid.readyToMerge = false;
                                     folderMergeTimer.stop();
                                     return;
@@ -5369,6 +5507,7 @@ animatedEntrance: true
 
                                 if (targetIdx === fromIdx) {
                                     dashboardGrid.hoverTargetIndex = -1;
+                                    dashboardGrid.folderDropIndex = -1;
                                     dashboardGrid.readyToMerge = false;
                                     folderMergeTimer.stop();
                                     return;
@@ -5396,6 +5535,7 @@ animatedEntrance: true
                                 }
 
                                 if (inCenter) {
+                                    dashboardGrid.folderDropIndex = -1;
                                     // Dwelling on the icon → offer a folder merge;
                                     // the target stays stable so the user can easily drop onto it.
                                     if (dashboardGrid.hoverTargetIndex !== targetIdx) {
@@ -5411,7 +5551,6 @@ animatedEntrance: true
                                     folderMergeTimer.stop();
 
                                     if (crossed && !overItem.isSpacer && !overItem.isEnlarged) {
-                                        // Passed the icon into the gap/edge → slide it aside to preview reorder
                                         dashboardModel.move(fromIdx, overIdx, 1);
                                         dashboardGrid.dragFromIndex = overIdx;
                                     }
