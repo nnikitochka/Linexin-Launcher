@@ -4806,7 +4806,7 @@ animatedEntrance: true
                             }
                         }
 
-                        // 2x2 Grid of applications inside the enlarged folder
+                        // 3x3 Grid of applications inside the enlarged folder
                         Grid {
                             id: enlargedGrid
                             z: 2
@@ -4814,16 +4814,19 @@ animatedEntrance: true
                             anchors.bottom: parent.bottom
                             anchors.left: parent.left
                             anchors.right: parent.right
-                            anchors.margins: 6
-                            columns: 2
-                            rows: 2
-                            spacing: 4
+                            anchors.leftMargin: 6
+                            anchors.rightMargin: 6
+                            anchors.bottomMargin: 6
+                            anchors.topMargin: 2
+                            columns: 3
+                            rows: 3
+                            spacing: 3
 
                             readonly property int appCount: dashDelegate.folderAppsList ? dashDelegate.folderAppsList.count : 0
-                            readonly property bool hasOverflow: appCount > 4
-                            readonly property int displayCount: Math.min(appCount, 4)
-                            readonly property real slotWidth: Math.max(1, (width - spacing) / 2)
-                            readonly property real slotHeight: Math.max(1, (height - spacing) / 2)
+                            readonly property bool hasOverflow: appCount > 9
+                            readonly property int displayCount: Math.min(appCount, 9)
+                            readonly property real slotWidth: Math.max(1, (width - spacing * 2) / 3)
+                            readonly property real slotHeight: Math.max(1, (height - spacing * 2) / 3)
 
                             Repeater {
                                 model: enlargedGrid.displayCount
@@ -4833,12 +4836,12 @@ animatedEntrance: true
                                     height: enlargedGrid.slotHeight
 
                                     readonly property int subIndex: index
-                                    readonly property bool isOverflowSlot: index === 3 && enlargedGrid.hasOverflow
+                                    readonly property bool isOverflowSlot: index === 8 && enlargedGrid.hasOverflow
                                     readonly property var subApp: (!isOverflowSlot && dashDelegate.folderAppsList && index < dashDelegate.folderAppsList.count) ? dashDelegate.folderAppsList.get(index) : null
                                     readonly property string slotDesktopFile: subApp ? (subApp.desktopFile || "") : ""
                                     readonly property string slotName: subApp ? (subApp.name || "") : ""
                                     readonly property string slotIcon: subApp ? (subApp.icon || "") : ""
-                                    readonly property int overflowRemaining: enlargedGrid.appCount - 3
+                                    readonly property int overflowRemaining: enlargedGrid.appCount - 8
                                     readonly property bool isDragging: slotMA.dragging
 
                                     opacity: isDragging ? 0.0 : 1.0
@@ -4860,7 +4863,7 @@ animatedEntrance: true
                                     Kirigami.Icon {
                                         visible: !enlargedAppSlot.isOverflowSlot
                                         anchors.centerIn: parent
-                                        width: Math.min(enlargedAppSlot.slotWidth * 0.72, enlargedAppSlot.slotHeight * 0.72, root.iconSize)
+                                        width: Math.min(enlargedAppSlot.slotWidth * 0.76, enlargedAppSlot.slotHeight * 0.76, root.iconSize)
                                         height: width
                                         source: enlargedAppSlot.slotIcon
                                         animated: false
@@ -4870,7 +4873,7 @@ animatedEntrance: true
                                     Rectangle {
                                         visible: enlargedAppSlot.isOverflowSlot
                                         anchors.centerIn: parent
-                                        width: Math.min(enlargedAppSlot.slotWidth * 0.72, enlargedAppSlot.slotHeight * 0.72, root.iconSize)
+                                        width: Math.min(enlargedAppSlot.slotWidth * 0.76, enlargedAppSlot.slotHeight * 0.76, root.iconSize)
                                         height: width
                                         radius: width / 2
                                         color: root.colorWithAlpha(Kirigami.Theme.textColor, 0.15)
@@ -4881,7 +4884,7 @@ animatedEntrance: true
                                             anchors.centerIn: parent
                                             text: "+" + enlargedAppSlot.overflowRemaining
                                             font.bold: true
-                                            font.pointSize: root.scaledFont(Kirigami.Theme.defaultFont.pointSize + 1, root.dashboardFontScale)
+                                            font.pointSize: root.scaledFont(Kirigami.Theme.defaultFont.pointSize - 1, root.dashboardFontScale)
                                             color: Kirigami.Theme.textColor
                                         }
                                     }
@@ -5047,10 +5050,10 @@ animatedEntrance: true
                                                 var posInGrid = mapToItem(enlargedGrid, mouse.x, mouse.y);
                                                 var targetCol = Math.floor(posInGrid.x / (enlargedGrid.slotWidth + enlargedGrid.spacing));
                                                 var targetRow = Math.floor(posInGrid.y / (enlargedGrid.slotHeight + enlargedGrid.spacing));
-                                                if (targetCol >= 0 && targetCol < 2 && targetRow >= 0 && targetRow < 2) {
-                                                    var targetSlot = targetRow * 2 + targetCol;
+                                                if (targetCol >= 0 && targetCol < 3 && targetRow >= 0 && targetRow < 3) {
+                                                    var targetSlot = targetRow * 3 + targetCol;
                                                     if (targetSlot >= 0 && targetSlot < enlargedGrid.displayCount
-                                                            && (!enlargedGrid.hasOverflow || targetSlot < 3)
+                                                            && (!enlargedGrid.hasOverflow || targetSlot < 8)
                                                             && targetSlot !== fromIdx) {
                                                         rootItem.reorderInFolder(dashDelegate.itemIndex, fromIdx, targetSlot);
                                                     }
