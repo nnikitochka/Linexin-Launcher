@@ -1590,11 +1590,6 @@ Kicker.DashboardWindow {
             }
         }
 
-        // A working-array index survives the rebuild unchanged: saveFromArray()
-        // writes every slot, auto ones included, and reload() lays them back down
-        // in the same order. So the plans below can hand out working-array
-        // indices as the positions the rebuilt grid will use.
-
         // --- Folder mutations: plan / commit ---
         //
         // Each of these is split in two. The plan* half is pure — it works out
@@ -1649,49 +1644,91 @@ Kicker.DashboardWindow {
             saveFromArray(apps);
         }
 
-        function planMoveAppOutOfFolder(folderIndex, appIndex, targetLandIndex) {
-            var apps = modelToArray();
-            var folder = apps[folderIndex];
-            if (!folder || folder.type !== "folder") return null;
+        function planMoveAppOutOfFolder(folderIndex, appIndex, targetLandIndex, mergeIntoTarget) {
+            var slots = modelToArray();
+            var folder = slots[folderIndex];
+            if (!folder || folder.type !== "folder" || appIndex < 0 || appIndex >= folder.apps.length)
+                return null;
             var arr = folder.apps.slice();
             var item = arr.splice(appIndex, 1)[0];
-            // Mark the extracted item as a pinned app
             item.type = "app";
+            item.previewSourceIndex = -1;
 
-            // Update folder
-            if (arr.length === 1) {
-                apps[folderIndex] = arr[0]; // dissolve
-                apps[folderIndex].type = "app";
-            } else if (arr.length === 0) {
-                apps.splice(folderIndex, 1);
-            } else {
-                folder.apps = arr;
-                apps[folderIndex] = folder;
-            }
+            var hasTarget = targetLandIndex !== undefined && targetLandIndex !== null && targetLandIndex >= 0;
+            if (hasTarget && targetLandIndex < slots.length
+                    && slots[targetLandIndex].type === "folder_spacer"
+                    && slots[targetLandIndex].parentFolderIndex >= 0)
+                targetLandIndex = slots[targetLandIndex].parentFolderIndex;
 
-            // Determine insert position
-            var insertIdx;
-            if (targetLandIndex !== undefined && targetLandIndex !== null && targetLandIndex >= 0) {
-                insertIdx = Math.min(targetLandIndex, apps.length);
-            } else {
-                insertIdx = folderIndex + 1;
-                while (insertIdx < apps.length && apps[insertIdx] && apps[insertIdx].type === "folder_spacer" && apps[insertIdx].parentFolderIndex === folderIndex) {
-                    insertIdx++;
+            // Work with logical entries, keeping their old cells only as preview
+            // identities. The shared packer rebuilds all 2x2 reservations.
+            var apps = [];
+            for (var i = 0; i < slots.length; ++i) {
+                var entry = slots[i];
+                if (entry.type === "folder_spacer") continue;
+                entry.previewSourceIndex = i;
+                if (i === folderIndex) {
+                    if (arr.length === 0) continue;
+                    if (arr.length === 1) {
+                        entry = arr[0];
+                        entry.type = "app";
+                        entry.previewSourceIndex = i;
+                    } else {
+                        entry.apps = arr;
+                    }
                 }
+                apps.push(entry);
             }
-            apps.splice(insertIdx, 0, item);
 
-            var survives = arr.length > 1;
-            var resultingFolderIndex = survives ? folderIndex + (insertIdx <= folderIndex ? 1 : 0) : -1;
+            var target = -1;
+            for (var j = 0; j < apps.length; ++j) {
+                if (apps[j].previewSourceIndex === targetLandIndex) target = j;
+            }
+            var merging = mergeIntoTarget === true && target >= 0 && targetLandIndex !== folderIndex;
+            var isNew = false;
+            if (merging) {
+                var into = apps[target];
+                isNew = into.type !== "folder";
+                if (isNew) {
+                    apps[target] = {type: "folder", name: i18n("New Folder"),
+                        apps: [{desktopFile: into.desktopFile, name: into.name, icon: into.icon},
+                               {desktopFile: item.desktopFile, name: item.name, icon: item.icon}],
+                        enlarged: false, previewSourceIndex: targetLandIndex};
+                } else {
+                    into.apps.push({desktopFile: item.desktopFile, name: item.name, icon: item.icon});
+                }
+            } else {
+                // Default ejection goes after the source folder. Explicit drops
+                // insert before the target, including empty cells and page ends.
+                var boundary = hasTarget && targetLandIndex !== folderIndex
+                             ? targetLandIndex : folderIndex + 1;
+                var insertIdx = 0;
+                while (insertIdx < apps.length && apps[insertIdx].previewSourceIndex < boundary) ++insertIdx;
+                apps.splice(insertIdx, 0, item);
+            }
+
+            var layout = layoutDashboardItems(apps);
+            var landIndex = -1;
+            var resultingFolderIndex = -1;
+            var mergeFolderIndex = -1;
+            for (var k = 0; k < layout.length; ++k) {
+                var packed = layout[k];
+                if (!packed || packed.type === "folder_spacer") continue;
+                if (packed.previewSourceIndex === -1) landIndex = k;
+                if (packed.previewSourceIndex === folderIndex && arr.length > 1) resultingFolderIndex = k;
+                if (merging && packed.previewSourceIndex === targetLandIndex) mergeFolderIndex = k;
+            }
             return {
                 apps: apps,
-                landIndex: insertIdx,
+                landIndex: landIndex,
                 folderIndex: resultingFolderIndex,
-                folderApp: survives ? arr[0].desktopFile : "",
-                folderSurvives: survives
+                folderApp: arr.length > 1 ? arr[0].desktopFile : "",
+                folderSurvives: arr.length > 1,
+                merging: merging,
+                isNew: isNew,
+                mergeFolderIndex: mergeFolderIndex
             };
         }
-
 
         function removeFolder(folderIndex) {
             var apps = modelToArray();
@@ -1734,7 +1771,8 @@ Kicker.DashboardWindow {
             // If B is already a folder, add A into it
             else if (itemB.type === "folder") {
                 folderApps = (itemB.apps || []).slice();
-                folderApps.unshift({desktopFile: itemA.desktopFile, name: itemA.name, icon: itemA.icon});
+                var insertAt = itemB.enlarged === true ? folderApps.length : 0;
+                folderApps.splice(insertAt, 0, {desktopFile: itemA.desktopFile, name: itemA.name, icon: itemA.icon});
                 apps[indexB] = {type: "folder", name: itemB.name, apps: folderApps, enlarged: (itemB.enlarged === true)};
                 apps.splice(indexA, 1);
                 keptIdx = indexA < indexB ? indexB - 1 : indexB;
@@ -1821,18 +1859,21 @@ Kicker.DashboardWindow {
         // Drops an app out of the open folder and onto the dashboard. The icon
         // flies from wherever it was let go to the slot it will occupy, and the
         // write lands with it so the grid never shows an intermediate state.
-        function ejectToDashboard(folderIndex, appIndex, icon, fromX, fromY, targetLandIndex) {
+        function ejectToDashboard(folderIndex, appIndex, icon, fromX, fromY, targetLandIndex, mergeIntoTarget) {
             var wasFolderOpen = openFolderIndex === folderIndex;
-            var plan = planMoveAppOutOfFolder(folderIndex, appIndex, targetLandIndex);
+            var plan = planMoveAppOutOfFolder(folderIndex, appIndex, targetLandIndex, mergeIntoTarget);
             if (!plan) return;
 
-            var dur = root.folderRemoveDuration;
-            var to = cellCentre(dashboardGrid, plan.landIndex);
+            var dur = plan.merging ? (plan.isNew ? root.folderCreateDuration : root.folderAddDuration)
+                                   : root.folderRemoveDuration;
+            var to = cellCentre(dashboardGrid, plan.merging ? plan.mergeFolderIndex : plan.landIndex);
             if (plan.folderSurvives && dur > 0) {
                 folderCardRecoil.start();
             }
 
-            dashboardGrid.beginFolderFx(-1, -1, plan.landIndex, dur, function() {
+            dashboardGrid.beginFolderFx(plan.merging && plan.isNew ? plan.mergeFolderIndex : -1,
+                                        plan.merging && !plan.isNew ? plan.mergeFolderIndex : -1,
+                                        plan.landIndex, dur, function() {
                 commitFolderPlan(plan);
                 if (wasFolderOpen) {
                     var newFolderIndex = -1;
@@ -1853,7 +1894,7 @@ Kicker.DashboardWindow {
                 }
             });
 
-            folderFx.fly(icon, fromX, fromY, to.x, to.y, dur, 1.0, false);
+            folderFx.fly(icon, fromX, fromY, to.x, to.y, dur, plan.merging ? 0.4 : 1.0, plan.merging);
         }
 
         // Menu-driven counterpart to ejectToDashboard. A menu click has no drag
@@ -2845,8 +2886,9 @@ Kicker.DashboardWindow {
             repeat: false
             property int targetIndex: -1
             onTriggered: {
-                if (dashboardGrid.dragFromIndex !== -1 && targetIndex !== -1
-                    && dashboardGrid.dragFromIndex !== targetIndex) {
+                if (dashboardGrid.dragActive && targetIndex !== -1
+                    && dashboardGrid.dragFromIndex !== targetIndex
+                    && dashboardGrid.folderDragIndex !== targetIndex) {
                     dashboardGrid.readyToMerge = true;
                 }
             }
@@ -4175,31 +4217,77 @@ animatedEntrance: true
                 property bool dragActive: false
                 property int folderDropIndex: -1
                 property bool deferReorder: false
+                property int folderDragIndex: -1
+                property int folderDragAppIndex: -1
+                property int folderDragTargetAppIndex: -1
+                property int folderInsertAppIndex: -1
+                property bool folderDragOutside: false
+                property bool previewFolderDissolves: false
+                property var previewFolderRemainder: null
                 property var previewLayout: ({})
                 property int previewLandIndex: -1
                 onFolderDropIndexChanged: refreshDropPreview()
                 onReadyToMergeChanged: refreshDropPreview()
 
+                function beginFolderAppDrag(folderIndex, appIndex) {
+                    endDrag();
+                    folderDragIndex = folderIndex;
+                    folderDragAppIndex = appIndex;
+                    folderDragTargetAppIndex = appIndex;
+                    deferReorder = true;
+                    dragActive = true;
+                }
+
+                function updateFolderAppDrag(x, y) {
+                    // Use the source's original cells: its visual preview may
+                    // already have moved aside to make room for the extracted app.
+                    var left = (folderDragIndex % root.columns) * cellWidth + 4;
+                    var top = Math.floor(folderDragIndex / root.columns) * cellHeight + 4;
+                    folderDragOutside = x < left || x > left + cellWidth * 2 - 8
+                                     || y < top || y > top + cellHeight * 2 - 8;
+                    if (folderDragOutside) {
+                        folderDragTargetAppIndex = -1;
+                        updateDropTarget(x, y, true);
+                    } else {
+                        folderDropIndex = -1;
+                        hoverTargetIndex = -1;
+                        folderInsertAppIndex = -1;
+                        readyToMerge = false;
+                        folderMergeTimer.stop();
+                    }
+                    refreshDropPreview();
+                }
+
                 function refreshDropPreview() {
                     var positions = {};
                     var landing = -1;
+                    previewFolderDissolves = false;
+                    previewFolderRemainder = null;
                     if (dragActive && deferReorder && !readyToMerge) {
-                        var plan = rootItem.planDashboardMove(dragFromIndex, folderDropIndex);
+                        var extracting = folderDragIndex >= 0;
+                        var extraction = extracting && folderDragOutside && folderDropIndex >= 0
+                            ? rootItem.planMoveAppOutOfFolder(folderDragIndex, folderDragAppIndex, folderDropIndex)
+                            : null;
+                        var plan = extracting ? (extraction ? extraction.apps : null)
+                                              : rootItem.planDashboardMove(dragFromIndex, folderDropIndex);
                         if (plan) {
                             var layout = rootItem.layoutDashboardItems(plan);
                             for (var i = 0; i < layout.length; i++) {
                                 var item = layout[i];
                                 if (!item || item.type === "folder_spacer") continue;
                                 positions[item.previewSourceIndex] = i;
-                                if (item.previewSourceIndex === dragFromIndex) landing = i;
+                                if (item.previewSourceIndex === (extracting ? -1 : dragFromIndex)) landing = i;
+                                if (extracting && item.previewSourceIndex === folderDragIndex && item.type !== "folder")
+                                    previewFolderRemainder = item;
                             }
+                            previewFolderDissolves = extracting && !extraction.folderSurvives;
                         }
                     }
                     previewLayout = positions;
                     previewLandIndex = landing;
                 }
                 property int hoverTargetIndex: -1  // for folder merge highlight
-                property bool readyToMerge: false   // armed after holding over target 600ms
+                property bool readyToMerge: false   // armed by folderMergeTimer
 
                 // Resolve cells geometrically: indexAt() misses empty space and
                 // can return the large delegate over one of its reserved cells.
@@ -4220,16 +4308,33 @@ animatedEntrance: true
                     folderDropIndex = target === dragFromIndex ? -1 : target;
 
                     var mergeTarget = -1;
-                    var source = dashboardModel.get(dragFromIndex);
-                    if (allowMerge && source && source.type !== "folder"
-                            && folderDropIndex >= 0 && target < dashboardModel.count) {
+                    var source = dragFromIndex >= 0 ? dashboardModel.get(dragFromIndex) : null;
+                    if (allowMerge && (folderDragIndex >= 0 || (source && source.type !== "folder"))
+                            && target !== folderDragIndex && folderDropIndex >= 0 && target < dashboardModel.count) {
                         var item = dashboardModel.get(target);
                         var span = item.type === "folder" && item.enlarged === true ? 2 : 1;
                         var relX = (x - (target % root.columns) * cellWidth) / (cellWidth * span);
                         var relY = (y - Math.floor(target / root.columns) * cellHeight) / (cellHeight * span);
-                        if (item.type !== "folder_spacer" && relX > 0.15 && relX < 0.85
-                                && relY > 0.15 && relY < 0.85) mergeTarget = target;
+                        var insetX = span === 2 ? 4 / (cellWidth * span) : 0.15;
+                        var insetY = span === 2 ? 4 / (cellHeight * span) : 0.15;
+                        if (item.type !== "folder_spacer" && relX > insetX && relX < 1 - insetX
+                                && relY > insetY && relY < 1 - insetY) mergeTarget = target;
                     }
+                    // Resolve against the target's original cells, since the
+                    // dashboard reorder preview can still be sliding it aside.
+                    var insertAt = -1;
+                    if (mergeTarget >= 0) {
+                        var mergeItem = dashboardModel.get(mergeTarget);
+                        if (mergeItem.type === "folder" && mergeItem.enlarged === true) {
+                            var delegate = itemAtIndex(mergeTarget);
+                            if (delegate) {
+                                insertAt = delegate.folderInsertionIndexAt(
+                                    x - (mergeTarget % root.columns) * cellWidth,
+                                    y - Math.floor(mergeTarget / root.columns) * cellHeight);
+                            }
+                        }
+                    }
+                    folderInsertAppIndex = insertAt;
                     if (hoverTargetIndex !== mergeTarget) {
                         hoverTargetIndex = mergeTarget;
                         readyToMerge = false;
@@ -4307,7 +4412,14 @@ animatedEntrance: true
                     hoverTargetIndex = -1;
                     dragFromIndex = -1;
                     dragStartIndex = -1;
-                    dragActive = false;
+                    folderDragIndex = -1;
+                    folderDragAppIndex = -1;
+                    folderDragTargetAppIndex = -1;
+                    folderInsertAppIndex = -1;
+                    folderDragOutside = false;
+                    previewFolderDissolves = false;
+                    previewFolderRemainder = null;
+                    folderMergeTimer.stop();
                     folderDropIndex = -1;
                     deferReorder = false;
                     previewLayout = ({});
@@ -4444,10 +4556,20 @@ animatedEntrance: true
                     width: isEnlarged ? dashboardGrid.cellWidth * 2 : dashboardGrid.cellWidth
                     height: isEnlarged ? dashboardGrid.cellHeight * 2 : dashboardGrid.cellHeight
                     visible: !isSpacer
-                    z: isEnlarged ? (dashMA.containsMouse || dashboardGrid.currentIndex === itemIndex ? 10 : 5) : 1
+                    z: isEnlarged ? (pointerHovered || keyboardFocused ? 10 : 5) : 1
+
+                    readonly property bool keyboardFocused: dashboardView.shown && !folderPopup.visible
+                                                            && dashboardGrid.activeFocus && dashboardGrid.currentIndex === itemIndex
+                    readonly property bool pointerHovered: dashboardView.shown && !folderPopup.visible && !dashboardGrid.dragActive
+                                                           && (isEnlarged ? enlargedFolderHover.hovered : dashMA.containsMouse)
 
                     readonly property int previewIndex: dashboardGrid.previewLayout[itemIndex] !== undefined
                                                        ? dashboardGrid.previewLayout[itemIndex] : itemIndex
+
+                    function folderInsertionIndexAt(x, y) {
+                        var point = enlargedGrid.mapFromItem(dashDelegate, x, y);
+                        return enlargedGrid.externalAppIndexAt(point.x, point.y);
+                    }
 
                     property bool entranceComplete: root.iconEntranceDuration <= 0
                     Accessible.role: isSpacer ? Accessible.NoRole : Accessible.Button
@@ -4512,9 +4634,9 @@ animatedEntrance: true
                     // Staggered entrance animation — dashEntranceAnim drives the
                     // 0.7 → 1 spring; this binding only handles hover afterwards
                     opacity: root.iconEntranceDuration > 0 ? 0 : 1
-                    scale: (entranceComplete
-                            && (dashMA.containsMouse || dashboardGrid.currentIndex === itemIndex)
-                            && !dashMA.dragging) ? 1.06 : 1.0
+                    scale: (!isEnlarged && entranceComplete
+                            && (pointerHovered || keyboardFocused)
+                            && !dashboardGrid.dragActive) ? 1.06 : 1.0
                     Behavior on scale {
                         NumberAnimation { duration: root.hoverEffectDuration; easing.type: Easing.OutBack; easing.overshoot: 2.0 }
                     }
@@ -4601,13 +4723,13 @@ animatedEntrance: true
                             properties: "xScale,yScale"
                             from: 0.25; to: 1.0
                             duration: Math.round(dashboardGrid.fxDuration * 1.15)
-                            easing.type: Easing.OutBack
+                            easing.type: dashDelegate.isEnlarged ? Easing.OutCubic : Easing.OutBack
                             easing.overshoot: 3.2
                         }
                         SequentialAnimation {
                             NumberAnimation {
                                 target: fxDelegateRotation; property: "angle"
-                                from: -14; to: 7
+                                from: dashDelegate.isEnlarged ? 0 : -14; to: dashDelegate.isEnlarged ? 0 : 7
                                 duration: Math.round(dashboardGrid.fxDuration * 0.45)
                                 easing.type: Easing.OutCubic
                             }
@@ -4646,7 +4768,7 @@ animatedEntrance: true
                             properties: "xScale,yScale"
                             to: 1.0
                             duration: Math.round(dashboardGrid.fxDuration * 0.78)
-                            easing.type: Easing.OutBack
+                            easing.type: dashDelegate.isEnlarged ? Easing.OutCubic : Easing.OutBack
                             easing.overshoot: 3.6
                         }
                     }
@@ -4715,15 +4837,17 @@ animatedEntrance: true
                             duration: Math.round(root.iconEntranceDuration * 0.5)
                             easing.type: Easing.OutCubic
                         }
-                        // Settles down from oversized — same curve as
-                        // ItemGridDelegate so both grids enter identically.
+                        // Large cards must stay inside their reserved cells,
+                        // including when they touch the grid's clipping edge.
                         NumberAnimation {
                             target: dashDelegate
                             property: "scale"
-                            from: 1.22; to: 1.0
+                            from: dashDelegate.isEnlarged ? 0.96 : 1.22; to: 1.0
                             duration: Math.round(root.iconEntranceDuration * 0.75)
                             easing.type: Easing.Bezier
-                            easing.bezierCurve: [0.12, 0.8, 0.24, 1.04, 1.0, 1.0]
+                            easing.bezierCurve: dashDelegate.isEnlarged
+                                                ? [0.12, 0.8, 0.24, 1.0, 1.0, 1.0]
+                                                : [0.12, 0.8, 0.24, 1.04, 1.0, 1.0]
                         }
                         onStarted: dashDelegate.entranceComplete = true
                     }
@@ -4738,8 +4862,7 @@ animatedEntrance: true
                         color: colorWithAlpha(Kirigami.Theme.highlightColor, 0.22)
                         border.width: 2
                         border.color: Kirigami.Theme.focusColor
-                        opacity: dashboardGrid.activeFocus
-                                 && dashboardGrid.currentIndex === dashDelegate.itemIndex ? 1 : 0
+                        opacity: dashDelegate.keyboardFocused ? 1 : 0
                         Behavior on opacity {
                             NumberAnimation { duration: root.hoverEffectDuration }
                         }
@@ -4748,6 +4871,11 @@ animatedEntrance: true
                     // Highlight when another icon is held over this one (folder merge target)
                     Rectangle {
                         id: mergeHighlight
+                        readonly property bool mergeReady: dashboardGrid.dragActive && dashboardGrid.readyToMerge
+                            && dashboardGrid.hoverTargetIndex === dashDelegate.itemIndex
+                            && dashboardGrid.dragFromIndex !== dashDelegate.itemIndex
+                            && dashboardGrid.folderDragIndex !== dashDelegate.itemIndex
+                            && !(dashDelegate.isEnlarged && enlargedGrid.externalDragActive)
                         anchors.centerIn: parent
                         width: dashDelegate.isEnlarged ? parent.width - 8 : root.iconSize + Kirigami.Units.largeSpacing * 2
                         height: dashDelegate.isEnlarged ? parent.height - 8 : width
@@ -4755,12 +4883,8 @@ animatedEntrance: true
                         color: Kirigami.Theme.highlightColor
                         // Only the armed (folder-merge) state fills — the plain
                         // "drop here to reorder" hover is shown by dropTargetOutline
-                        opacity: {
-                            if (dashboardGrid.dragFromIndex === -1 || dashboardGrid.dragFromIndex === dashDelegate.itemIndex) return 0;
-                            if (dashboardGrid.hoverTargetIndex !== dashDelegate.itemIndex) return 0;
-                            return dashboardGrid.readyToMerge ? 0.55 : 0;
-                        }
-                        scale: dashboardGrid.readyToMerge && dashboardGrid.hoverTargetIndex === dashDelegate.itemIndex ? (dashDelegate.isEnlarged ? 1.03 : 1.15) : 1.0
+                        opacity: mergeReady ? 0.55 : 0
+                        scale: mergeReady ? (dashDelegate.isEnlarged ? 1.03 : 1.15) : 1.0
                         Behavior on opacity {
                             NumberAnimation { duration: 150; easing.type: Easing.OutCubic }
                         }
@@ -4785,8 +4909,7 @@ animatedEntrance: true
                             border.color: Kirigami.Theme.highlightColor
                             opacity: 0
                             visible: root.dragMoveDuration > 0
-                                     && dashboardGrid.readyToMerge
-                                     && dashboardGrid.hoverTargetIndex === dashDelegate.itemIndex
+                                     && mergeHighlight.mergeReady
 
                             SequentialAnimation {
                                 running: mergePulseRing.visible
@@ -4814,6 +4937,7 @@ animatedEntrance: true
                         border.color: Kirigami.Theme.highlightColor
                         opacity: (dashboardGrid.dragActive
                                   && dashboardGrid.previewLandIndex < 0
+                                  && dashboardGrid.folderDragIndex < 0
                                   && (dashboardGrid.folderDropIndex >= 0
                                       ? dashboardGrid.folderDropIndex === dashDelegate.itemIndex
                                       : dashboardGrid.dragFromIndex === dashDelegate.itemIndex)
@@ -4942,6 +5066,32 @@ animatedEntrance: true
                         }
                     }
 
+                    Item {
+                        width: dashboardGrid.cellWidth
+                        height: dashboardGrid.cellHeight
+                        visible: dashboardGrid.folderDragIndex === dashDelegate.itemIndex
+                                 && dashboardGrid.previewFolderDissolves
+                                 && dashboardGrid.previewFolderRemainder !== null
+                        Column {
+                            anchors.centerIn: parent
+                            spacing: 2
+                            Kirigami.Icon {
+                                width: root.iconSize
+                                height: root.iconSize
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                source: dashboardGrid.previewFolderRemainder ? dashboardGrid.previewFolderRemainder.icon : ""
+                                animated: false
+                            }
+                            PlasmaComponents.Label {
+                                width: root.cellSize - 4
+                                text: dashboardGrid.previewFolderRemainder ? dashboardGrid.previewFolderRemainder.name : ""
+                                horizontalAlignment: Text.AlignHCenter
+                                elide: Text.ElideRight
+                                font.pointSize: root.scaledFont(Kirigami.Theme.defaultFont.pointSize - 1, root.dashboardFontScale)
+                            }
+                        }
+                    }
+
                     // === ENLARGED FOLDER DELEGATE (2x2 Grid) ===
                     Rectangle {
                         id: enlargedFolderCard
@@ -4951,13 +5101,15 @@ animatedEntrance: true
                         radius: Kirigami.Units.cornerRadius * 2
                         color: root.colorWithAlpha(root.bgColor, 0.78)
                         border.width: 1
-                        border.color: (cardPlateMA.containsMouse || dashboardGrid.currentIndex === dashDelegate.itemIndex)
+                        border.color: (dashDelegate.pointerHovered || dashDelegate.keyboardFocused)
                                       ? root.colorWithAlpha(Kirigami.Theme.highlightColor, 0.5)
                                       : root.colorWithAlpha(Kirigami.Theme.textColor, 0.15)
 
                         readonly property bool handedToPopup: folderPopup.visible
                                                               && folderPopup.displayedFolderIndex === dashDelegate.itemIndex
                         opacity: {
+                            if (dashboardGrid.folderDragIndex === dashDelegate.itemIndex
+                                    && dashboardGrid.previewFolderDissolves) return 0.0;
                             if (dashboardGrid.dragActive && dashboardGrid.dragFromIndex === dashDelegate.itemIndex) return 0.0;
                             if (handedToPopup) return Math.max(0, 1 - folderPopup.openProgress * 2.5);
                             return 1.0;
@@ -4968,6 +5120,12 @@ animatedEntrance: true
                         }
                         Behavior on border.color {
                             ColorAnimation { duration: 150 }
+                        }
+
+                        HoverHandler {
+                            id: enlargedFolderHover
+                            enabled: dashDelegate.isEnlarged && dashboardView.shown
+                                     && !folderPopup.visible && !dashboardGrid.dragActive
                         }
 
                         // Background click handler for enlarged folder card (opens popup on left click, context menu on right click)
@@ -5100,6 +5258,69 @@ animatedEntrance: true
                             readonly property real slotWidth: Math.max(1, (width - spacing * 2) / 3)
                             readonly property real slotHeight: Math.max(1, (height - spacing * 2) / 3)
 
+                            readonly property bool internalDragActive: dashboardGrid.dragActive
+                                && dashboardGrid.folderDragIndex === dashDelegate.itemIndex
+                                && !dashboardGrid.folderDragOutside
+                            readonly property bool externalDragActive: dashboardGrid.dragActive
+                                && dashboardGrid.readyToMerge
+                                && dashboardGrid.hoverTargetIndex === dashDelegate.itemIndex
+                                && dashboardGrid.folderDragIndex !== dashDelegate.itemIndex
+                                && dashboardGrid.folderInsertAppIndex >= 0
+                            readonly property int dropAppIndex: internalDragActive
+                                ? dashboardGrid.folderDragTargetAppIndex
+                                : (externalDragActive ? dashboardGrid.folderInsertAppIndex : -1)
+
+                            function appIndexAt(x, y) {
+                                if (x < 0 || y < 0 || x >= width || y >= height) return -1;
+                                var col = Math.floor(x / (slotWidth + spacing));
+                                var row = Math.floor(y / (slotHeight + spacing));
+                                var index = row * 3 + col;
+                                if (col >= 3 || row >= 3 || (hasOverflow && index >= 8)) return -1;
+                                return Math.min(index, displayCount - 1);
+                            }
+
+                            function previewIndexFor(appIndex) {
+                                if (!internalDragActive) return appIndex;
+                                if (appIndex === 8 && hasOverflow) return 8;
+                                var target = dropAppIndex;
+                                var source = dashboardGrid.folderDragAppIndex;
+                                if (target < 0 || source < 0) return appIndex;
+                                if (appIndex === source) return target;
+                                if (source < target && appIndex > source && appIndex <= target) return appIndex - 1;
+                                if (source > target && appIndex >= target && appIndex < source) return appIndex + 1;
+                                return appIndex;
+                            }
+
+                            function externalAppIndexAt(x, y) {
+                                if (appCount >= 9 || x < 0 || y < 0 || x >= width || y >= height) return -1;
+                                var col = Math.floor(x / (slotWidth + spacing));
+                                var row = Math.floor(y / (slotHeight + spacing));
+                                var index = row * 3 + col;
+                                // Only the first empty cell represents the next
+                                // app. Everywhere else offers the whole folder.
+                                if (col >= 3 || row >= 3 || index !== appCount
+                                        || x - col * (slotWidth + spacing) >= slotWidth
+                                        || y - row * (slotHeight + spacing) >= slotHeight) return -1;
+                                return appCount;
+                            }
+
+                            Rectangle {
+                                id: folderAppDropOutline
+                                // Keep the overlay outside the Grid's positioned
+                                // children so it cannot take an application slot.
+                                parent: enlargedFolderCard
+                                z: 3
+                                visible: enlargedGrid.dropAppIndex >= 0
+                                x: enlargedGrid.x + (enlargedGrid.dropAppIndex % 3) * (enlargedGrid.slotWidth + enlargedGrid.spacing)
+                                y: enlargedGrid.y + Math.floor(enlargedGrid.dropAppIndex / 3) * (enlargedGrid.slotHeight + enlargedGrid.spacing)
+                                width: enlargedGrid.slotWidth
+                                height: enlargedGrid.slotHeight
+                                radius: Kirigami.Units.cornerRadius
+                                color: root.colorWithAlpha(Kirigami.Theme.highlightColor, 0.18)
+                                border.width: 2
+                                border.color: Kirigami.Theme.highlightColor
+                            }
+
                             Repeater {
                                 model: enlargedGrid.displayCount
                                 delegate: Item {
@@ -5119,19 +5340,36 @@ animatedEntrance: true
                                     readonly property int overflowRemaining: enlargedGrid.appCount - 8
                                     readonly property bool isDragging: slotMA.dragging
 
+                                    readonly property bool pointerHovered: dashboardView.shown && !folderPopup.visible
+                                        && !dashboardGrid.dragActive && slotMA.containsMouse
+                                    readonly property int previewIndex: enlargedGrid.previewIndexFor(subIndex)
+                                    z: pointerHovered ? 1 : 0
+                                    scale: pointerHovered ? 1.06 : 1.0
+                                    Behavior on scale {
+                                        NumberAnimation { duration: root.hoverEffectDuration; easing.type: Easing.OutBack; easing.overshoot: 2.0 }
+                                    }
                                     opacity: isDragging ? 0.0 : 1.0
                                     Behavior on opacity {
-                                        NumberAnimation { duration: 100 }
+                                        NumberAnimation { duration: root.hoverEffectDuration }
                                     }
-
-                                    Rectangle {
-                                        id: slotHoverBg
-                                        anchors.fill: parent
-                                        radius: Kirigami.Units.cornerRadius
-                                        color: root.colorWithAlpha(Kirigami.Theme.highlightColor, slotMA.containsMouse ? 0.22 : 0)
-                                        border.width: slotMA.containsMouse ? 1 : 0
-                                        border.color: root.colorWithAlpha(Kirigami.Theme.highlightColor, 0.4)
-                                        Behavior on color { ColorAnimation { duration: 120 } }
+                                    transform: Translate {
+                                        // The grabbed MouseArea stays in its original
+                                        // cell while the other icons open a gap.
+                                        readonly property bool holdsDrag: dashboardGrid.dragActive
+                                            && dashboardGrid.folderDragIndex === dashDelegate.itemIndex
+                                            && dashboardGrid.folderDragAppIndex === enlargedAppSlot.subIndex
+                                        x: holdsDrag ? 0
+                                           : ((enlargedAppSlot.previewIndex % 3) - (enlargedAppSlot.subIndex % 3)) * (enlargedGrid.slotWidth + enlargedGrid.spacing)
+                                        y: holdsDrag ? 0
+                                           : (Math.floor(enlargedAppSlot.previewIndex / 3) - Math.floor(enlargedAppSlot.subIndex / 3)) * (enlargedGrid.slotHeight + enlargedGrid.spacing)
+                                        Behavior on x { NumberAnimation { duration: dashboardGrid.dragActive ? root.dragMoveDuration : 0 } }
+                                        Behavior on y { NumberAnimation { duration: dashboardGrid.dragActive ? root.dragMoveDuration : 0 } }
+                                    }
+                                    Accessible.role: Accessible.Button
+                                    Accessible.name: isOverflowSlot ? i18n("Open folder") : slotName
+                                    Accessible.onPressAction: {
+                                        if (isOverflowSlot) dashDelegate.activate(false);
+                                        else if (slotDesktopFile !== "") launchAppFromItem(slotDesktopFile, enlargedAppSlot);
                                     }
 
                                     // Regular app slot content (icon only)
@@ -5173,7 +5411,7 @@ animatedEntrance: true
                                         cursorShape: Qt.PointingHandCursor
                                         acceptedButtons: Qt.LeftButton | Qt.RightButton
 
-                                        ToolTip.visible: containsMouse && !dragging && !enlargedAppSlot.isOverflowSlot && enlargedAppSlot.slotName !== ""
+                                        ToolTip.visible: enlargedAppSlot.pointerHovered && !enlargedAppSlot.isOverflowSlot && enlargedAppSlot.slotName !== ""
                                         ToolTip.text: enlargedAppSlot.slotName
                                         ToolTip.delay: 400
 
@@ -5187,12 +5425,29 @@ animatedEntrance: true
                                                 return;
                                             }
                                             dragging = true;
+                                            dashboardGrid.beginFolderAppDrag(dashDelegate.itemIndex, enlargedAppSlot.subIndex);
                                             dragGhost.iconSource = enlargedAppSlot.slotIcon;
                                             dragGhost.labelText = enlargedAppSlot.slotName;
                                             var globalPos = mapToItem(rootItem, x, y);
                                             dragGhost.x = globalPos.x - dragGhost.width / 2;
                                             dragGhost.y = globalPos.y - dragGhost.height / 2;
                                             dragGhost.visible = true;
+                                        }
+
+                                        function updateDragPosition(x, y) {
+                                            var mapped = mapToItem(dashboardGrid.contentItem, x, y);
+                                            dashboardGrid.updateFolderAppDrag(mapped.x, mapped.y);
+                                            if (!dashboardGrid.folderDragOutside) {
+                                                // Measure from the original source cells,
+                                                // even while its dashboard preview is
+                                                // animating back from another position.
+                                                var folderIndex = dashboardGrid.folderDragIndex;
+                                                var originalX = (folderIndex % root.columns) * dashboardGrid.cellWidth;
+                                                var originalY = Math.floor(folderIndex / root.columns) * dashboardGrid.cellHeight;
+                                                var inGrid = enlargedGrid.mapFromItem(dashDelegate,
+                                                    mapped.x - originalX, mapped.y - originalY);
+                                                dashboardGrid.folderDragTargetAppIndex = enlargedGrid.appIndexAt(inGrid.x, inGrid.y);
+                                            }
                                         }
 
                                         function cancelPress() {
@@ -5202,6 +5457,7 @@ animatedEntrance: true
                                             if (dragging) {
                                                 dragging = false;
                                                 dragGhost.visible = false;
+                                                dashboardGrid.endDrag();
                                             }
                                         }
 
@@ -5253,6 +5509,7 @@ animatedEntrance: true
                                                 var globalPos = mapToItem(rootItem, mouse.x, mouse.y);
                                                 dragGhost.x = globalPos.x - dragGhost.width / 2;
                                                 dragGhost.y = globalPos.y - dragGhost.height / 2;
+                                                updateDragPosition(mouse.x, mouse.y);
                                             }
                                         }
 
@@ -5262,12 +5519,13 @@ animatedEntrance: true
                                             }
 
                                             var wasDragging = dragging;
+                                            var wasPressed = pressX !== -1;
                                             pressX = -1;
                                             pressY = -1;
                                             mouseDragArmed = false;
 
                                             if (!wasDragging) {
-                                                if (mouse.button === Qt.LeftButton) {
+                                                if (wasPressed && mouse.button === Qt.LeftButton) {
                                                     if (enlargedAppSlot.isOverflowSlot) {
                                                         dashDelegate.activate(false);
                                                     } else if (enlargedAppSlot.slotDesktopFile !== "") {
@@ -5285,54 +5543,20 @@ animatedEntrance: true
                                             var ghostX = dragGhost.x + dragGhost.width / 2;
                                             var ghostY = dragGhost.y + dragGhost.height / 2;
 
-                                            var posInCard = mapToItem(enlargedFolderCard, mouse.x, mouse.y);
-                                            var droppedOut = posInCard.x < 0 || posInCard.x > enlargedFolderCard.width
-                                                             || posInCard.y < 0 || posInCard.y > enlargedFolderCard.height;
+                                            var folderIndex = dashboardGrid.folderDragIndex;
+                                            updateDragPosition(mouse.x, mouse.y);
+                                            var droppedOut = dashboardGrid.folderDragOutside;
+                                            var targetLand = dashboardGrid.folderDropIndex;
+                                            var targetApp = dashboardGrid.folderDragTargetAppIndex;
+                                            var merging = dashboardGrid.readyToMerge && dashboardGrid.hoverTargetIndex >= 0;
+                                            dashboardGrid.endDrag();
 
                                             if (droppedOut) {
-                                                var mapped = mapToItem(dashboardGrid.contentItem, mouse.x, mouse.y);
-                                                var overIdx = dashboardGrid.indexAt(mapped.x, mapped.y);
-                                                var targetLand = -1;
-                                                if (overIdx !== -1) {
-                                                    var overItem = dashboardGrid.itemAtIndex(overIdx);
-                                                    if (overItem && overItem.isSpacer && overItem.parentFolderIndex >= 0) {
-                                                        targetLand = overItem.parentFolderIndex;
-                                                    } else {
-                                                        targetLand = overIdx;
-                                                    }
-                                                } else {
-                                                    var inGrid = mapped.x >= 0 && mapped.x < dashboardGrid.width && mapped.y >= 0 && mapped.y < dashboardGrid.height;
-                                                    if (inGrid) {
-                                                        var cols = Math.max(1, Math.round(dashboardGrid.width / dashboardGrid.cellWidth));
-                                                        var col = Math.floor(mapped.x / dashboardGrid.cellWidth);
-                                                        var row = Math.floor(mapped.y / dashboardGrid.cellHeight);
-                                                        var cellIdx = row * cols + col;
-                                                        if (cellIdx >= dashboardModel.count) {
-                                                            targetLand = dashboardModel.count;
-                                                        } else if (cellIdx >= 0) {
-                                                            targetLand = cellIdx;
-                                                        }
-                                                    }
-                                                }
-
-                                                if (targetLand === dashDelegate.itemIndex) {
-                                                    targetLand = -1;
-                                                }
-
-                                                rootItem.ejectToDashboard(dashDelegate.itemIndex, fromIdx,
-                                                                          ghostIcon, ghostX, ghostY, targetLand);
+                                                rootItem.ejectToDashboard(folderIndex, fromIdx,
+                                                                          ghostIcon, ghostX, ghostY, targetLand, merging);
                                             } else {
-                                                // Dropped inside enlargedFolderCard - reorder apps inside the folder if dropped on another slot
-                                                var posInGrid = mapToItem(enlargedGrid, mouse.x, mouse.y);
-                                                var targetCol = Math.floor(posInGrid.x / (enlargedGrid.slotWidth + enlargedGrid.spacing));
-                                                var targetRow = Math.floor(posInGrid.y / (enlargedGrid.slotHeight + enlargedGrid.spacing));
-                                                if (targetCol >= 0 && targetCol < 3 && targetRow >= 0 && targetRow < 3) {
-                                                    var targetSlot = targetRow * 3 + targetCol;
-                                                    if (targetSlot >= 0 && targetSlot < enlargedGrid.displayCount
-                                                            && (!enlargedGrid.hasOverflow || targetSlot < 8)
-                                                            && targetSlot !== fromIdx) {
-                                                        rootItem.reorderInFolder(dashDelegate.itemIndex, fromIdx, targetSlot);
-                                                    }
+                                                if (targetApp >= 0 && targetApp !== fromIdx) {
+                                                    rootItem.reorderInFolder(folderIndex, fromIdx, targetApp);
                                                 }
                                             }
                                         }
@@ -5385,6 +5609,7 @@ animatedEntrance: true
                             // destroys this delegate along with the MouseArea running
                             // this handler, so trailing statements may never run.
                             var wasDragging = dragging;
+                            var wasPressed = pressX !== -1;
                             pressX = -1;
                             pressY = -1;
 
@@ -5437,7 +5662,7 @@ animatedEntrance: true
                                         rootItem.syncModelToConfig();
                                     }
                                 }
-                            } else if (mouse.button === Qt.LeftButton) {
+                            } else if (wasPressed && mouse.button === Qt.LeftButton) {
                                 dashDelegate.activate(false);
                             }
                         }
