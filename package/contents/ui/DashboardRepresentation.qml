@@ -1681,11 +1681,13 @@ Kicker.DashboardWindow {
             }
             apps.splice(insertIdx, 0, item);
 
-            var survives = (apps[folderIndex] && apps[folderIndex].type === "folder");
+            var survives = arr.length > 1;
+            var resultingFolderIndex = survives ? folderIndex + (insertIdx <= folderIndex ? 1 : 0) : -1;
             return {
                 apps: apps,
                 landIndex: insertIdx,
-                folderIndex: survives ? folderIndex : -1,
+                folderIndex: resultingFolderIndex,
+                folderApp: survives ? arr[0].desktopFile : "",
                 folderSurvives: survives
             };
         }
@@ -1832,12 +1834,24 @@ Kicker.DashboardWindow {
 
             dashboardGrid.beginFolderFx(-1, -1, plan.landIndex, dur, function() {
                 commitFolderPlan(plan);
+                if (wasFolderOpen) {
+                    var newFolderIndex = -1;
+                    if (plan.folderSurvives) {
+                        for (var i = 0; i < dashboardModel.count; ++i) {
+                            var item = dashboardModel.get(i);
+                            if (item.type !== "folder" || !item.apps) continue;
+                            for (var j = 0; j < item.apps.count; ++j) {
+                                if (sameApplication(item.apps.get(j).desktopFile, plan.folderApp)) {
+                                    newFolderIndex = i;
+                                    break;
+                                }
+                            }
+                            if (newFolderIndex !== -1) break;
+                        }
+                    }
+                    openFolderIndex = newFolderIndex;
+                }
             });
-            // The rebuild can shift the folder's row; follow it so the popup
-            // keeps showing the folder the user is actually looking at.
-            if (wasFolderOpen) {
-                openFolderIndex = plan.folderSurvives ? plan.folderIndex : -1;
-            }
 
             folderFx.fly(icon, fromX, fromY, to.x, to.y, dur, 1.0, false);
         }
@@ -1927,6 +1941,42 @@ Kicker.DashboardWindow {
             return arr;
         }
 
+        // Reorder logical items, then let reload rebuild the 2x2 reservations.
+        function moveEnlargedFolder(fromIndex, targetIndex) {
+            var slots = modelToArray();
+            var folder = slots[fromIndex];
+            if (!folder || folder.type !== "folder" || targetIndex < 0) return false;
+            if (targetIndex < slots.length && slots[targetIndex].type === "folder_spacer"
+                    && slots[targetIndex].parentFolderIndex >= 0) {
+                targetIndex = slots[targetIndex].parentFolderIndex;
+            }
+            if (targetIndex === fromIndex) return false;
+
+            var items = [];
+            var source = -1;
+            var target = -1;
+            for (var i = 0; i < slots.length; i++) {
+                if (slots[i].type === "folder_spacer") continue;
+                if (i === fromIndex) source = items.length;
+                if (i === targetIndex) target = items.length;
+                items.push(slots[i]);
+            }
+            if (source < 0) return false;
+            // Empty slots use their position in the visible sequence.
+            if (target < 0) {
+                target = 0;
+                for (var j = 0; j < Math.min(targetIndex, slots.length); j++) {
+                    if (slots[j].type !== "folder_spacer") target++;
+                }
+                if (target > source) target--;
+            }
+            if (target === source) return false;
+            items.splice(source, 1);
+            items.splice(Math.max(0, Math.min(target, items.length)), 0, folder);
+            saveFromArray(items);
+            return true;
+        }
+
         // Turn one working-array/model item into its persisted form. Auto items
         // are kept as bare placeholders: they carry no name or icon of their own
         // (the all-apps model owns those, and they can change under us) and exist
@@ -1941,6 +1991,52 @@ Kicker.DashboardWindow {
             return {desktopFile: item.desktopFile, name: item.name, icon: item.icon};
         }
 
+        // Retain auto entries omitted from the model while their source is
+        // unavailable. Anchor each one to the next surviving saved item.
+        function preserveHiddenAutoItems(saved) {
+            function containsApp(item, desktopFile) {
+                if (item.type === "folder") {
+                    return (item.apps || []).some(function(app) {
+                        return rootItem.sameApplication(app.desktopFile, desktopFile);
+                    });
+                }
+                return rootItem.sameApplication(item.desktopFile, desktopFile);
+            }
+            function matches(a, b) {
+                if (a.type === "folder" || b.type === "folder") {
+                    return a.type === "folder" && b.type === "folder" && a.name === b.name;
+                }
+                return rootItem.sameApplication(a.desktopFile, b.desktopFile);
+            }
+            var next = null;
+            for (var i = dashboardApps.length - 1; i >= 0; --i) {
+                var old = dashboardApps[i];
+                var index = -1;
+                for (var j = 0; j < saved.length; ++j) {
+                    if (matches(saved[j], old)) { index = j; break; }
+                }
+                if (old.type === "auto" && index === -1) {
+                    var represented = saved.some(function(item) { return containsApp(item, old.desktopFile); });
+                    var available = false;
+                    for (var k = 0; k < dashboardModel.count; ++k) {
+                        var current = dashboardModel.get(k);
+                        if (current.type === "auto" && sameApplication(current.desktopFile, old.desktopFile)) {
+                            available = true;
+                            break;
+                        }
+                    }
+                    if (!represented && !available) {
+                        var position = next ? saved.indexOf(next) : saved.length;
+                        saved.splice(position < 0 ? saved.length : position, 0, old);
+                        next = old;
+                        continue;
+                    }
+                }
+                if (index !== -1) next = saved[index];
+            }
+            return saved;
+        }
+
         // Save from a working array, preserving the arrangement, then reload
         function saveFromArray(arr) {
             var saved = [];
@@ -1948,7 +2044,7 @@ Kicker.DashboardWindow {
                 if (arr[i].type === "folder_spacer") continue;
                 saved.push(persistedItem(arr[i]));
             }
-            dashboardApps = saved;
+            dashboardApps = preserveHiddenAutoItems(saved);
             saveDashboard();
             dashboardModel.reload();
             folderRevision++;
@@ -1977,7 +2073,7 @@ Kicker.DashboardWindow {
                     apps.push(rootItem.persistedItem(item));
                 }
             }
-            rootItem.dashboardApps = apps;
+            rootItem.dashboardApps = preserveHiddenAutoItems(apps);
             rootItem.saveDashboard();
             dashboardModel.reload();
         }
@@ -4063,6 +4159,7 @@ animatedEntrance: true
                 // model.move()s during the drag stay correct even as GridView
                 // re-binds delegates to data.
                 property bool dragActive: false
+                property int folderDropIndex: -1
                 property int hoverTargetIndex: -1  // for folder merge highlight
                 property bool readyToMerge: false   // armed after holding over target 600ms
 
@@ -4112,6 +4209,7 @@ animatedEntrance: true
                     dragFromIndex = -1;
                     dragStartIndex = -1;
                     dragActive = false;
+                    folderDropIndex = -1;
                 }
 
                 Timer {
@@ -4232,6 +4330,7 @@ animatedEntrance: true
                     property bool isSpacer: model.type === "folder_spacer"
                     property bool isFolder: model.type === "folder"
                     property bool isEnlarged: isFolder && model.enlarged === true
+                                              && root.columns >= 2 && root.dashRows >= 2
                     property int parentFolderIndex: model.parentFolderIndex !== undefined ? model.parentFolderIndex : -1
                     readonly property var folderAppsList: {
                         var rev = rootItem.folderRevision;
@@ -4592,6 +4691,7 @@ animatedEntrance: true
                     // already slid aside to open it, so this just marks the spot.
                     Rectangle {
                         id: dropTargetOutline
+                        z: 20
                         anchors.centerIn: parent
                         width: dashDelegate.isEnlarged ? parent.width - 8 : root.iconSize + Kirigami.Units.largeSpacing * 2
                         height: dashDelegate.isEnlarged ? parent.height - 8 : width
@@ -4600,7 +4700,9 @@ animatedEntrance: true
                         border.width: 2
                         border.color: Kirigami.Theme.highlightColor
                         opacity: (dashboardGrid.dragActive
-                                  && dashboardGrid.dragFromIndex === dashDelegate.itemIndex
+                                  && (dashboardGrid.folderDropIndex >= 0
+                                      ? dashboardGrid.folderDropIndex === dashDelegate.itemIndex
+                                      : dashboardGrid.dragFromIndex === dashDelegate.itemIndex)
                                   && !dashboardGrid.readyToMerge) ? 1.0 : 0.0
                         visible: opacity > 0.01
                         scale: (opacity > 0.01) ? 1.0 : 0.85
@@ -4762,10 +4864,77 @@ animatedEntrance: true
                             hoverEnabled: true
                             acceptedButtons: Qt.LeftButton | Qt.RightButton
                             cursorShape: Qt.PointingHandCursor
-                            onClicked: mouse => {
+                            preventStealing: true
+                            property real pressX: -1
+                            property real pressY: -1
+                            property bool dragging: false
+
+                            function cancelDrag() {
+                                pressX = -1;
+                                pressY = -1;
+                                if (dragging) {
+                                    dragging = false;
+                                    dragGhost.visible = false;
+                                    dashboardGrid.endDrag();
+                                }
+                            }
+
+                            onPressed: mouse => {
                                 if (mouse.button === Qt.RightButton) {
                                     dashDelegate.openContextMenu(mouse.x, mouse.y);
                                 } else {
+                                    pressX = mouse.x;
+                                    pressY = mouse.y;
+                                }
+                            }
+                            onCanceled: cancelDrag()
+                            onPositionChanged: mouse => {
+                                if (pressX < 0) return;
+                                var dx = mouse.x - pressX;
+                                var dy = mouse.y - pressY;
+                                if (!dragging && dx * dx + dy * dy > 400) {
+                                    dragging = true;
+                                    dashboardGrid.dragFromIndex = dashDelegate.itemIndex;
+                                    dashboardGrid.dragStartIndex = dashDelegate.itemIndex;
+                                    dashboardGrid.dragActive = true;
+                                    dragGhost.iconSource = "folder";
+                                    dragGhost.labelText = model.name || i18n("Folder");
+                                    dragGhost.visible = true;
+                                }
+                                if (!dragging) return;
+                                var pos = mapToItem(rootItem, mouse.x, mouse.y);
+                                dragGhost.x = pos.x - dragGhost.width / 2;
+                                dragGhost.y = pos.y - dragGhost.height / 2;
+                                var gridPos = mapToItem(dashboardGrid.contentItem, mouse.x, mouse.y);
+                                var col = Math.floor(gridPos.x / dashboardGrid.cellWidth);
+                                var row = Math.floor(gridPos.y / dashboardGrid.cellHeight);
+                                if (col < 0 || col >= root.columns || row < 0
+                                        || gridPos.x >= dashboardGrid.width
+                                        || gridPos.y < dashboardGrid.contentY
+                                        || gridPos.y >= dashboardGrid.contentY + dashboardGrid.height) {
+                                    dashboardGrid.folderDropIndex = -1;
+                                    return;
+                                }
+                                var target = Math.min(row * root.columns + col, dashboardModel.count);
+                                if (target < dashboardModel.count) {
+                                    var slot = dashboardModel.get(target);
+                                    if (slot.type === "folder_spacer" && slot.parentFolderIndex >= 0)
+                                        target = slot.parentFolderIndex;
+                                }
+                                dashboardGrid.folderDropIndex = target;
+                            }
+                            onReleased: mouse => {
+                                var wasDragging = dragging;
+                                var from = dashboardGrid.dragFromIndex;
+                                var target = dashboardGrid.folderDropIndex;
+                                pressX = -1;
+                                pressY = -1;
+                                dragging = false;
+                                if (wasDragging) {
+                                    dragGhost.visible = false;
+                                    dashboardGrid.endDrag();
+                                    rootItem.moveEnlargedFolder(from, target);
+                                } else if (mouse.button === Qt.LeftButton) {
                                     dashDelegate.activate(false);
                                 }
                             }
