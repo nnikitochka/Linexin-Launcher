@@ -4842,65 +4842,33 @@ animatedEntrance: true
                                         Behavior on color { ColorAnimation { duration: 120 } }
                                     }
 
-                                    // Regular app slot content
-                                    Column {
+                                    // Regular app slot content (icon only)
+                                    Kirigami.Icon {
                                         visible: !enlargedAppSlot.isOverflowSlot
                                         anchors.centerIn: parent
-                                        spacing: 2
-                                        width: parent.width - 4
-
-                                        Kirigami.Icon {
-                                            width: Math.min(enlargedAppSlot.slotHeight * 0.52, root.iconSize * 0.72)
-                                            height: width
-                                            source: enlargedAppSlot.slotIcon
-                                            anchors.horizontalCenter: parent.horizontalCenter
-                                            animated: false
-                                        }
-
-                                        PlasmaComponents.Label {
-                                            text: enlargedAppSlot.slotName
-                                            width: parent.width
-                                            horizontalAlignment: Text.AlignHCenter
-                                            elide: Text.ElideRight
-                                            maximumLineCount: 1
-                                            font.pointSize: root.scaledFont(Kirigami.Theme.defaultFont.pointSize - 2, root.dashboardFontScale)
-                                            anchors.horizontalCenter: parent.horizontalCenter
-                                        }
+                                        width: Math.min(enlargedAppSlot.slotWidth * 0.72, enlargedAppSlot.slotHeight * 0.72, root.iconSize)
+                                        height: width
+                                        source: enlargedAppSlot.slotIcon
+                                        animated: false
                                     }
 
-                                    // Overflow / "More" badge slot content
-                                    Column {
+                                    // Overflow / "More" badge slot content (+N only)
+                                    Rectangle {
                                         visible: enlargedAppSlot.isOverflowSlot
                                         anchors.centerIn: parent
-                                        spacing: 2
-                                        width: parent.width - 4
-
-                                        Rectangle {
-                                            width: Math.min(enlargedAppSlot.slotHeight * 0.52, root.iconSize * 0.72)
-                                            height: width
-                                            radius: width / 2
-                                            anchors.horizontalCenter: parent.horizontalCenter
-                                            color: root.colorWithAlpha(Kirigami.Theme.textColor, 0.15)
-                                            border.width: 1
-                                            border.color: root.colorWithAlpha(Kirigami.Theme.textColor, 0.25)
-
-                                            PlasmaComponents.Label {
-                                                anchors.centerIn: parent
-                                                text: "+" + enlargedAppSlot.overflowRemaining
-                                                font.bold: true
-                                                font.pointSize: root.scaledFont(Kirigami.Theme.defaultFont.pointSize - 0.5, root.dashboardFontScale)
-                                                color: Kirigami.Theme.textColor
-                                            }
-                                        }
+                                        width: Math.min(enlargedAppSlot.slotWidth * 0.72, enlargedAppSlot.slotHeight * 0.72, root.iconSize)
+                                        height: width
+                                        radius: width / 2
+                                        color: root.colorWithAlpha(Kirigami.Theme.textColor, 0.15)
+                                        border.width: 1
+                                        border.color: root.colorWithAlpha(Kirigami.Theme.textColor, 0.25)
 
                                         PlasmaComponents.Label {
-                                            text: i18n("More…")
-                                            width: parent.width
-                                            horizontalAlignment: Text.AlignHCenter
-                                            elide: Text.ElideRight
-                                            maximumLineCount: 1
-                                            font.pointSize: root.scaledFont(Kirigami.Theme.defaultFont.pointSize - 2, root.dashboardFontScale)
-                                            anchors.horizontalCenter: parent.horizontalCenter
+                                            anchors.centerIn: parent
+                                            text: "+" + enlargedAppSlot.overflowRemaining
+                                            font.bold: true
+                                            font.pointSize: root.scaledFont(Kirigami.Theme.defaultFont.pointSize + 1, root.dashboardFontScale)
+                                            color: Kirigami.Theme.textColor
                                         }
                                     }
 
@@ -4910,6 +4878,10 @@ animatedEntrance: true
                                         hoverEnabled: true
                                         cursorShape: Qt.PointingHandCursor
                                         acceptedButtons: Qt.LeftButton | Qt.RightButton
+
+                                        ToolTip.visible: containsMouse && !enlargedAppSlot.isOverflowSlot && enlargedAppSlot.slotName !== ""
+                                        ToolTip.text: enlargedAppSlot.slotName
+                                        ToolTip.delay: 400
 
                                         onClicked: mouse => {
                                             if (mouse.button === Qt.RightButton) {
