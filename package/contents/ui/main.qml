@@ -81,6 +81,7 @@ PlasmoidItem {
         showRecentApps: Plasmoid.configuration.showRecentApps
         showRecentDocs: Plasmoid.configuration.showRecentDocs
         recentOrdering: Plasmoid.configuration.recentOrdering
+        showPowerSession: false
 
         onShowRecentAppsChanged: {
             Plasmoid.configuration.showRecentApps = showRecentApps;

@@ -2046,6 +2046,7 @@ Kicker.DashboardWindow {
             showTopLevelItems: false
             showRecentApps: false
             showRecentDocs: false
+            showPowerSession: false
         }
 
         property var dashAllAppsModel: null
@@ -2972,7 +2973,11 @@ Kicker.DashboardWindow {
                     // RootModel emits a placeholder row between "All Applications"
                     // and the real categories: empty label, and modelForRow() returns
                     // null. Without this it renders as a blank pill mid-row.
-                    visible: categoryLabel.trim().length > 0
+                    readonly property bool isPowerSession: model.display === "Power / Session"
+                        || model.display === i18nd("libkicker", "Power / Session")
+                        || model.display === "Завершение работы"
+
+                    visible: categoryLabel.trim().length > 0 && !isPowerSession
 
                     width: catLabel.implicitWidth + Kirigami.Units.largeSpacing * 3
                     height: catLabel.implicitHeight + categoryRowContainer.pillPadding
