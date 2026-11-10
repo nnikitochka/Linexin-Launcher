@@ -1649,7 +1649,7 @@ Kicker.DashboardWindow {
             saveFromArray(apps);
         }
 
-        function planMoveAppOutOfFolder(folderIndex, appIndex) {
+        function planMoveAppOutOfFolder(folderIndex, appIndex, targetLandIndex) {
             var apps = modelToArray();
             var folder = apps[folderIndex];
             if (!folder || folder.type !== "folder") return null;
@@ -1669,8 +1669,16 @@ Kicker.DashboardWindow {
                 apps[folderIndex] = folder;
             }
 
-            // Add the removed app after the folder position
-            var insertIdx = Math.min(folderIndex + 1, apps.length);
+            // Determine insert position
+            var insertIdx;
+            if (targetLandIndex !== undefined && targetLandIndex !== null && targetLandIndex >= 0) {
+                insertIdx = Math.min(targetLandIndex, apps.length);
+            } else {
+                insertIdx = folderIndex + 1;
+                while (insertIdx < apps.length && apps[insertIdx] && apps[insertIdx].type === "folder_spacer" && apps[insertIdx].parentFolderIndex === folderIndex) {
+                    insertIdx++;
+                }
+            }
             apps.splice(insertIdx, 0, item);
 
             var survives = (apps[folderIndex] && apps[folderIndex].type === "folder");
@@ -1811,8 +1819,8 @@ Kicker.DashboardWindow {
         // Drops an app out of the open folder and onto the dashboard. The icon
         // flies from wherever it was let go to the slot it will occupy, and the
         // write lands with it so the grid never shows an intermediate state.
-        function ejectToDashboard(folderIndex, appIndex, icon, fromX, fromY) {
-            var plan = planMoveAppOutOfFolder(folderIndex, appIndex);
+        function ejectToDashboard(folderIndex, appIndex, icon, fromX, fromY, targetLandIndex) {
+            var plan = planMoveAppOutOfFolder(folderIndex, appIndex, targetLandIndex);
             if (!plan) return;
 
             var dur = root.folderRemoveDuration;
@@ -1835,7 +1843,7 @@ Kicker.DashboardWindow {
         // release point to carry on from, so the icon sets off from the cell it
         // occupies in the folder.
         function ejectFromFolder(folderIndex, appIndex, icon) {
-            var from = cellCentre(folderGrid, appIndex);
+            var from = folderPopup.visible ? cellCentre(folderGrid, appIndex) : cellCentre(dashboardGrid, folderIndex);
             ejectToDashboard(folderIndex, appIndex, icon, from.x, from.y);
         }
 
@@ -4831,6 +4839,12 @@ animatedEntrance: true
                                     readonly property string slotName: subApp ? (subApp.name || "") : ""
                                     readonly property string slotIcon: subApp ? (subApp.icon || "") : ""
                                     readonly property int overflowRemaining: enlargedGrid.appCount - 3
+                                    readonly property bool isDragging: slotMA.dragging
+
+                                    opacity: isDragging ? 0.0 : 1.0
+                                    Behavior on opacity {
+                                        NumberAnimation { duration: 100 }
+                                    }
 
                                     Rectangle {
                                         id: slotHoverBg
@@ -4876,15 +4890,48 @@ animatedEntrance: true
                                         id: slotMA
                                         anchors.fill: parent
                                         hoverEnabled: true
+                                        preventStealing: true
                                         cursorShape: Qt.PointingHandCursor
                                         acceptedButtons: Qt.LeftButton | Qt.RightButton
 
-                                        ToolTip.visible: containsMouse && !enlargedAppSlot.isOverflowSlot && enlargedAppSlot.slotName !== ""
+                                        ToolTip.visible: containsMouse && !dragging && !enlargedAppSlot.isOverflowSlot && enlargedAppSlot.slotName !== ""
                                         ToolTip.text: enlargedAppSlot.slotName
                                         ToolTip.delay: 400
 
-                                        onClicked: mouse => {
+                                        property int pressX: -1
+                                        property int pressY: -1
+                                        property bool dragging: false
+                                        property bool mouseDragArmed: false
+
+                                        function beginDrag(x, y) {
+                                            if (dragging || pressX === -1 || enlargedAppSlot.isOverflowSlot) {
+                                                return;
+                                            }
+                                            dragging = true;
+                                            dragGhost.iconSource = enlargedAppSlot.slotIcon;
+                                            dragGhost.labelText = enlargedAppSlot.slotName;
+                                            var globalPos = mapToItem(rootItem, x, y);
+                                            dragGhost.x = globalPos.x - dragGhost.width / 2;
+                                            dragGhost.y = globalPos.y - dragGhost.height / 2;
+                                            dragGhost.visible = true;
+                                        }
+
+                                        function cancelPress() {
+                                            pressX = -1;
+                                            pressY = -1;
+                                            mouseDragArmed = false;
+                                            if (dragging) {
+                                                dragging = false;
+                                                dragGhost.visible = false;
+                                            }
+                                        }
+
+                                        onPressed: mouse => {
+                                            mouseDragArmed = mouse.source === Qt.MouseEventNotSynthesized;
                                             if (mouse.button === Qt.RightButton) {
+                                                pressX = -1;
+                                                pressY = -1;
+                                                mouseDragArmed = false;
                                                 if (!enlargedAppSlot.isOverflowSlot) {
                                                     dashContextMenu.itemIndex = dashDelegate.itemIndex;
                                                     dashContextMenu.isFolder = false;
@@ -4901,10 +4948,112 @@ animatedEntrance: true
                                                     dashDelegate.openContextMenu(mouse.x, mouse.y);
                                                 }
                                             } else {
-                                                if (enlargedAppSlot.isOverflowSlot) {
-                                                    dashDelegate.activate(false);
-                                                } else if (enlargedAppSlot.slotDesktopFile !== "") {
-                                                    launchAppFromItem(enlargedAppSlot.slotDesktopFile, enlargedAppSlot);
+                                                pressX = mouse.x;
+                                                pressY = mouse.y;
+                                            }
+                                        }
+
+                                        onPressAndHold: mouse => {
+                                            if (mouse.button === Qt.LeftButton && !mouseDragArmed && !enlargedAppSlot.isOverflowSlot) {
+                                                beginDrag(mouse.x, mouse.y);
+                                            }
+                                        }
+
+                                        onCanceled: cancelPress()
+
+                                        onPositionChanged: mouse => {
+                                            if (pressX !== -1 && !dragging) {
+                                                if (enlargedAppSlot.isOverflowSlot) return;
+                                                var dx = mouse.x - pressX;
+                                                var dy = mouse.y - pressY;
+                                                if (mouseDragArmed && dx*dx + dy*dy > 400) {
+                                                    beginDrag(mouse.x, mouse.y);
+                                                }
+                                            }
+                                            if (dragging) {
+                                                var globalPos = mapToItem(rootItem, mouse.x, mouse.y);
+                                                dragGhost.x = globalPos.x - dragGhost.width / 2;
+                                                dragGhost.y = globalPos.y - dragGhost.height / 2;
+                                            }
+                                        }
+
+                                        onReleased: mouse => {
+                                            if (mouse.button === Qt.RightButton) {
+                                                return;
+                                            }
+
+                                            var wasDragging = dragging;
+                                            pressX = -1;
+                                            pressY = -1;
+                                            mouseDragArmed = false;
+
+                                            if (!wasDragging) {
+                                                if (mouse.button === Qt.LeftButton) {
+                                                    if (enlargedAppSlot.isOverflowSlot) {
+                                                        dashDelegate.activate(false);
+                                                    } else if (enlargedAppSlot.slotDesktopFile !== "") {
+                                                        launchAppFromItem(enlargedAppSlot.slotDesktopFile, enlargedAppSlot);
+                                                    }
+                                                }
+                                                return;
+                                            }
+
+                                            dragging = false;
+                                            dragGhost.visible = false;
+
+                                            var fromIdx = enlargedAppSlot.subIndex;
+                                            var ghostIcon = dragGhost.iconSource;
+                                            var ghostX = dragGhost.x + dragGhost.width / 2;
+                                            var ghostY = dragGhost.y + dragGhost.height / 2;
+
+                                            var posInCard = mapToItem(enlargedFolderCard, mouse.x, mouse.y);
+                                            var droppedOut = posInCard.x < 0 || posInCard.x > enlargedFolderCard.width
+                                                             || posInCard.y < 0 || posInCard.y > enlargedFolderCard.height;
+
+                                            if (droppedOut) {
+                                                var mapped = mapToItem(dashboardGrid.contentItem, mouse.x, mouse.y);
+                                                var overIdx = dashboardGrid.indexAt(mapped.x, mapped.y);
+                                                var targetLand = -1;
+                                                if (overIdx !== -1) {
+                                                    var overItem = dashboardGrid.itemAtIndex(overIdx);
+                                                    if (overItem && overItem.isSpacer && overItem.parentFolderIndex >= 0) {
+                                                        targetLand = overItem.parentFolderIndex;
+                                                    } else {
+                                                        targetLand = overIdx;
+                                                    }
+                                                } else {
+                                                    var inGrid = mapped.x >= 0 && mapped.x < dashboardGrid.width && mapped.y >= 0 && mapped.y < dashboardGrid.height;
+                                                    if (inGrid) {
+                                                        var cols = Math.max(1, Math.round(dashboardGrid.width / dashboardGrid.cellWidth));
+                                                        var col = Math.floor(mapped.x / dashboardGrid.cellWidth);
+                                                        var row = Math.floor(mapped.y / dashboardGrid.cellHeight);
+                                                        var cellIdx = row * cols + col;
+                                                        if (cellIdx >= dashboardModel.count) {
+                                                            targetLand = dashboardModel.count;
+                                                        } else if (cellIdx >= 0) {
+                                                            targetLand = cellIdx;
+                                                        }
+                                                    }
+                                                }
+
+                                                if (targetLand === dashDelegate.itemIndex) {
+                                                    targetLand = -1;
+                                                }
+
+                                                rootItem.ejectToDashboard(dashDelegate.itemIndex, fromIdx,
+                                                                          ghostIcon, ghostX, ghostY, targetLand);
+                                            } else {
+                                                // Dropped inside enlargedFolderCard - reorder apps inside the folder if dropped on another slot
+                                                var posInGrid = mapToItem(enlargedGrid, mouse.x, mouse.y);
+                                                var targetCol = Math.floor(posInGrid.x / (enlargedGrid.slotWidth + enlargedGrid.spacing));
+                                                var targetRow = Math.floor(posInGrid.y / (enlargedGrid.slotHeight + enlargedGrid.spacing));
+                                                if (targetCol >= 0 && targetCol < 2 && targetRow >= 0 && targetRow < 2) {
+                                                    var targetSlot = targetRow * 2 + targetCol;
+                                                    if (targetSlot >= 0 && targetSlot < enlargedGrid.displayCount
+                                                            && (!enlargedGrid.hasOverflow || targetSlot < 3)
+                                                            && targetSlot !== fromIdx) {
+                                                        rootItem.reorderInFolder(dashDelegate.itemIndex, fromIdx, targetSlot);
+                                                    }
                                                 }
                                             }
                                         }
