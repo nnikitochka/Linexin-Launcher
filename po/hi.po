@@ -293,3 +293,15 @@ msgstr "अनुप्रयोग संपादित करें…"
 
 msgid "Uninstall or Manage Add-Ons…"
 msgstr "ऐड-ऑन अनइंस्टॉल या प्रबंधित करें…"
+
+msgid "Enlarge Folder"
+msgstr ""
+
+msgid "Shrink Folder"
+msgstr ""
+
+msgid "Folder (Enlarged)"
+msgstr ""
+
+msgid "More…"
+msgstr ""

@@ -294,3 +294,15 @@ msgstr "Редактировать приложение…"
 
 msgid "Uninstall or Manage Add-Ons…"
 msgstr "Удалить или управлять дополнениями…"
+
+msgid "Enlarge Folder"
+msgstr "Увеличить папку"
+
+msgid "Shrink Folder"
+msgstr "Уменьшить папку"
+
+msgid "Folder (Enlarged)"
+msgstr "Папка (увеличенная)"
+
+msgid "More…"
+msgstr "Ещё…"

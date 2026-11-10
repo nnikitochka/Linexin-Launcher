@@ -292,3 +292,15 @@ msgstr "编辑应用程序…"
 
 msgid "Uninstall or Manage Add-Ons…"
 msgstr "卸载或管理附加组件…"
+
+msgid "Enlarge Folder"
+msgstr ""
+
+msgid "Shrink Folder"
+msgstr ""
+
+msgid "Folder (Enlarged)"
+msgstr ""
+
+msgid "More…"
+msgstr ""

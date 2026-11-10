@@ -295,3 +295,15 @@ msgstr "Programma bewerken…"
 
 msgid "Uninstall or Manage Add-Ons…"
 msgstr "Uitbreidingen beheren of verwijderen…"
+
+msgid "Enlarge Folder"
+msgstr ""
+
+msgid "Shrink Folder"
+msgstr ""
+
+msgid "Folder (Enlarged)"
+msgstr ""
+
+msgid "More…"
+msgstr ""

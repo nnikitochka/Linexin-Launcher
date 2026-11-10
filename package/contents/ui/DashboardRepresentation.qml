@@ -517,6 +517,12 @@ Kicker.DashboardWindow {
     mainItem: Item {
         id: rootItem
 
+        Connections {
+            target: root
+            function onColumnsChanged() { Qt.callLater(dashboardModel.reload); }
+            function onDashRowsChanged() { Qt.callLater(dashboardModel.reload); }
+        }
+
         anchors.fill: parent
 
         opacity: 0
@@ -1456,7 +1462,7 @@ Kicker.DashboardWindow {
                         icon: sourceApp.icon
                     });
                 }
-                return {type: "folder", name: item.name, apps: folderApps};
+                return {type: "folder", name: item.name, apps: folderApps, enlarged: (item.enlarged === true)};
             }
 
             var appUrl = canonicalApplicationUrl(item.desktopFile);
@@ -1558,7 +1564,7 @@ Kicker.DashboardWindow {
                     if (folderApps.length !== item.apps.length) {
                         removedFromFolder = true;
                         if (folderApps.length > 1) {
-                            apps.push({type: "folder", name: item.name, apps: folderApps});
+                            apps.push({type: "folder", name: item.name, apps: folderApps, enlarged: (item.enlarged === true)});
                         } else if (folderApps.length === 1) {
                             apps.push({
                                 type: "app",
@@ -1711,7 +1717,7 @@ Kicker.DashboardWindow {
                 } else {
                     folderApps.push({desktopFile: itemB.desktopFile, name: itemB.name, icon: itemB.icon});
                 }
-                apps[indexA] = {type: "folder", name: itemA.name, apps: folderApps};
+                apps[indexA] = {type: "folder", name: itemA.name, apps: folderApps, enlarged: (itemA.enlarged === true)};
                 apps.splice(indexB, 1);
                 keptIdx = indexB < indexA ? indexA - 1 : indexA;
             }
@@ -1719,7 +1725,7 @@ Kicker.DashboardWindow {
             else if (itemB.type === "folder") {
                 folderApps = (itemB.apps || []).slice();
                 folderApps.unshift({desktopFile: itemA.desktopFile, name: itemA.name, icon: itemA.icon});
-                apps[indexB] = {type: "folder", name: itemB.name, apps: folderApps};
+                apps[indexB] = {type: "folder", name: itemB.name, apps: folderApps, enlarged: (itemB.enlarged === true)};
                 apps.splice(indexA, 1);
                 keptIdx = indexA < indexB ? indexB - 1 : indexB;
             }
@@ -1731,7 +1737,8 @@ Kicker.DashboardWindow {
                     apps: [
                         {desktopFile: itemA.desktopFile, name: itemA.name, icon: itemA.icon},
                         {desktopFile: itemB.desktopFile, name: itemB.name, icon: itemB.icon}
-                    ]
+                    ],
+                    enlarged: false
                 };
                 // Replace the target (B) with the folder, remove the dragged (A)
                 apps[indexB] = folder;
@@ -1751,10 +1758,19 @@ Kicker.DashboardWindow {
             }
         }
 
+        function toggleFolderEnlarged(folderIndex) {
+            var apps = modelToArray();
+            var folder = apps[folderIndex];
+            if (!folder || folder.type !== "folder") return;
+            folder.enlarged = !(folder.enlarged === true);
+            apps[folderIndex] = folder;
+            saveFromArray(apps);
+        }
+
         function createFolderFromApp(index) {
             var apps = modelToArray();
             var item = apps[index];
-            if (!item || item.type === "folder") return;
+            if (!item || item.type === "folder" || item.type === "folder_spacer") return;
 
             var folder = {
                 type: "folder",
@@ -1763,7 +1779,8 @@ Kicker.DashboardWindow {
                     desktopFile: item.desktopFile,
                     name: item.name,
                     icon: item.icon
-                }]
+                }],
+                enlarged: false
             };
             apps[index] = folder;
             saveFromArray(apps);
@@ -1889,7 +1906,9 @@ Kicker.DashboardWindow {
                             folderApps.push({desktopFile: sub.desktopFile, name: sub.name, icon: sub.icon});
                         }
                     }
-                    arr.push({type: "folder", name: item.name, desktopFile: "", icon: "", apps: folderApps});
+                    arr.push({type: "folder", name: item.name, desktopFile: "", icon: "", apps: folderApps, enlarged: (item.enlarged === true)});
+                } else if (item.type === "folder_spacer") {
+                    arr.push({type: "folder_spacer", parentFolderIndex: item.parentFolderIndex !== undefined ? item.parentFolderIndex : -1});
                 } else {
                     arr.push({type: item.type, desktopFile: item.desktopFile, name: item.name, icon: item.icon});
                 }
@@ -1903,7 +1922,7 @@ Kicker.DashboardWindow {
         // only to remember the slot the user left the app in.
         function persistedItem(item) {
             if (item.type === "folder") {
-                return {type: "folder", name: item.name, apps: item.apps};
+                return {type: "folder", name: item.name, apps: item.apps, enlarged: (item.enlarged === true)};
             }
             if (item.type === "auto") {
                 return {type: "auto", desktopFile: item.desktopFile};
@@ -1915,6 +1934,7 @@ Kicker.DashboardWindow {
         function saveFromArray(arr) {
             var saved = [];
             for (var i = 0; i < arr.length; i++) {
+                if (arr[i].type === "folder_spacer") continue;
                 saved.push(persistedItem(arr[i]));
             }
             dashboardApps = saved;
@@ -1930,6 +1950,7 @@ Kicker.DashboardWindow {
             var apps = [];
             for (var i = 0; i < dashboardModel.count; i++) {
                 var item = dashboardModel.get(i);
+                if (item.type === "folder_spacer") continue;
                 if (item.type === "folder") {
                     var folderApps = [];
                     // ListModel stores the sub-array as a ListModel too
@@ -1940,13 +1961,14 @@ Kicker.DashboardWindow {
                             folderApps.push({desktopFile: sub.desktopFile, name: sub.name, icon: sub.icon});
                         }
                     }
-                    apps.push({type: "folder", name: item.name, apps: folderApps});
+                    apps.push({type: "folder", name: item.name, apps: folderApps, enlarged: (item.enlarged === true)});
                 } else {
                     apps.push(rootItem.persistedItem(item));
                 }
             }
             rootItem.dashboardApps = apps;
             rootItem.saveDashboard();
+            dashboardModel.reload();
         }
 
         ListModel {
@@ -1966,51 +1988,168 @@ Kicker.DashboardWindow {
                     }
                 }
 
+                var unplaced = [];
                 var existing = {};
                 var apps = rootItem.dashboardApps;
                 for (var i = 0; i < apps.length; i++) {
                     var item = apps[i];
+                    if (!item || item.type === "folder_spacer") continue;
                     if (item.type === "folder") {
-                        var entry = {type: "folder", name: item.name, desktopFile: "", icon: "",
-                                     apps: []};
-                        append(entry);
-                        // Add sub-apps into the nested ListModel
+                        var subApps = [];
                         var folderApps = item.apps || [];
                         for (var j = 0; j < folderApps.length; j++) {
-                            var folderApp = rootItem.normalizedDashboardItem(folderApps[j]);
-                            get(count - 1).apps.append(folderApp);
-                            existing[folderApp.desktopFile] = true;
+                            var fApp = rootItem.normalizedDashboardItem(folderApps[j]);
+                            subApps.push(fApp);
+                            existing[fApp.desktopFile] = true;
                         }
+                        unplaced.push({
+                            type: "folder",
+                            name: item.name,
+                            desktopFile: "",
+                            icon: "",
+                            apps: subApps,
+                            enlarged: (item.enlarged === true)
+                        });
                     } else if (item.type === "auto") {
-                        // A placeholder: the app is not pinned, it just holds the
-                        // slot the user put it in. It only reappears while the
-                        // all-apps model still lists it, so uninstalled apps fall
-                        // out instead of lingering as dead tiles.
                         var autoUrl = rootItem.canonicalApplicationUrl(item.desktopFile)
                                       || item.desktopFile;
                         var src = available[autoUrl];
                         if (!src) continue;
-                        append({type: "auto", desktopFile: src.appUrl, name: src.appName,
-                                icon: src.appIcon, apps: []});
+                        unplaced.push({
+                            type: "auto",
+                            desktopFile: src.appUrl,
+                            name: src.appName,
+                            icon: src.appIcon,
+                            apps: [],
+                            enlarged: false
+                        });
                         existing[src.appUrl] = true;
                     } else {
                         var pinnedUrl = rootItem.canonicalApplicationUrl(item.desktopFile)
                                         || item.desktopFile;
-                        append({type: "app", desktopFile: pinnedUrl,
-                                name: item.name, icon: item.icon, apps: []});
+                        unplaced.push({
+                            type: "app",
+                            desktopFile: pinnedUrl,
+                            name: item.name,
+                            icon: item.icon,
+                            apps: [],
+                            enlarged: false
+                        });
                         existing[pinnedUrl] = true;
                     }
                 }
 
-                // Everything else the all-apps model knows about — newly installed
-                // apps, and the whole list on a dashboard that has never been
-                // arranged — goes on the end in the model's own order.
                 if (haveAuto) {
                     for (var i = 0; i < allAppsHelper.count; i++) {
                         var obj = allAppsHelper.objectAt(i);
                         if (!obj || !obj.appUrl || existing[obj.appUrl]) continue;
-                        append({type: "auto", desktopFile: obj.appUrl, name: obj.appName,
-                                icon: obj.appIcon, apps: []});
+                        unplaced.push({
+                            type: "auto",
+                            desktopFile: obj.appUrl,
+                            name: obj.appName,
+                            icon: obj.appIcon,
+                            apps: [],
+                            enlarged: false
+                        });
+                    }
+                }
+
+                var cols = Math.max(1, root.columns);
+                var rowsPerPage = Math.max(1, root.dashRows);
+                var grid = [];
+
+                function isSlotFree(slot) {
+                    return !grid[slot];
+                }
+
+                function canFitEnlargedAt(slot) {
+                    var c = slot % cols;
+                    var r = Math.floor(slot / cols);
+                    var pr = r % rowsPerPage;
+                    if (c >= cols - 1 || pr >= rowsPerPage - 1) return false;
+                    var s0 = slot;
+                    var s1 = slot + 1;
+                    var s2 = slot + cols;
+                    var s3 = slot + cols + 1;
+                    return isSlotFree(s0) && isSlotFree(s1) && isSlotFree(s2) && isSlotFree(s3);
+                }
+
+                var currentSlot = 0;
+                while (unplaced.length > 0) {
+                    while (!isSlotFree(currentSlot)) {
+                        currentSlot++;
+                    }
+
+                    var nextItem = unplaced[0];
+                    if (nextItem.type === "folder" && nextItem.enlarged && cols >= 2 && rowsPerPage >= 2) {
+                        if (canFitEnlargedAt(currentSlot)) {
+                            unplaced.shift();
+                            grid[currentSlot] = nextItem;
+                            grid[currentSlot + 1] = { type: "folder_spacer", parentFolderIndex: currentSlot };
+                            grid[currentSlot + cols] = { type: "folder_spacer", parentFolderIndex: currentSlot };
+                            grid[currentSlot + cols + 1] = { type: "folder_spacer", parentFolderIndex: currentSlot };
+                            currentSlot++;
+                        } else {
+                            var singleIdx = -1;
+                            for (var k = 1; k < unplaced.length; k++) {
+                                if (!(unplaced[k].type === "folder" && unplaced[k].enlarged)) {
+                                    singleIdx = k;
+                                    break;
+                                }
+                            }
+                            if (singleIdx !== -1) {
+                                var singleItem = unplaced.splice(singleIdx, 1)[0];
+                                grid[currentSlot] = singleItem;
+                                currentSlot++;
+                            } else {
+                                grid[currentSlot] = { type: "folder_spacer", parentFolderIndex: -1 };
+                                currentSlot++;
+                            }
+                        }
+                    } else {
+                        unplaced.shift();
+                        grid[currentSlot] = nextItem;
+                        currentSlot++;
+                    }
+                }
+
+                for (var s = 0; s < grid.length; s++) {
+                    var gItem = grid[s];
+                    if (!gItem || gItem.type === "folder_spacer") {
+                        append({
+                            type: "folder_spacer",
+                            desktopFile: "",
+                            name: "",
+                            icon: "",
+                            apps: [],
+                            enlarged: false,
+                            parentFolderIndex: (gItem && gItem.parentFolderIndex !== undefined) ? gItem.parentFolderIndex : -1
+                        });
+                    } else if (gItem.type === "folder") {
+                        var fEntry = {
+                            type: "folder",
+                            name: gItem.name,
+                            desktopFile: "",
+                            icon: "",
+                            apps: [],
+                            enlarged: (gItem.enlarged === true),
+                            parentFolderIndex: -1
+                        };
+                        append(fEntry);
+                        var subList = get(count - 1).apps;
+                        for (var j = 0; j < gItem.apps.length; j++) {
+                            subList.append(gItem.apps[j]);
+                        }
+                    } else {
+                        append({
+                            type: gItem.type,
+                            desktopFile: gItem.desktopFile,
+                            name: gItem.name,
+                            icon: gItem.icon,
+                            apps: [],
+                            enlarged: false,
+                            parentFolderIndex: -1
+                        });
                     }
                 }
 
@@ -2114,6 +2253,7 @@ Kicker.DashboardWindow {
             id: dashContextMenu
             property string desktopFile: ""
             property bool isFolder: false
+            property bool isEnlarged: false
             property bool isAutoItem: false
             // Set when the menu was opened on an app inside an open folder
             // rather than on a dashboard tile. Everything below the first
@@ -2189,6 +2329,16 @@ Kicker.DashboardWindow {
                     var df = dashContextMenu.desktopFile;
                     dashContextMenu.close();
                     rootItem.addToDashboard(df, "", "");
+                }
+            }
+            PlasmaExtras.MenuItem {
+                text: dashContextMenu.isEnlarged ? i18n("Shrink Folder") : i18n("Enlarge Folder")
+                icon: dashContextMenu.isEnlarged ? "zoom-out" : "zoom-in"
+                visible: dashContextMenu.isFolder
+                onClicked: {
+                    var idx = dashContextMenu.folderIdx;
+                    dashContextMenu.close();
+                    rootItem.toggleFolderEnlarged(idx);
                 }
             }
             PlasmaExtras.MenuItem {
@@ -3977,7 +4127,25 @@ animatedEntrance: true
                         searchField.forceActiveFocus();
                         return;
                     }
-                    currentIndex = Math.max(0, Math.min(index, count - 1));
+                    var target = Math.max(0, Math.min(index, count - 1));
+                    var m = dashboardModel.get(target);
+                    if (m && m.type === "folder_spacer") {
+                        if (m.parentFolderIndex !== undefined && m.parentFolderIndex >= 0) {
+                            target = m.parentFolderIndex;
+                        } else {
+                            for (var offset = 1; offset < count; offset++) {
+                                if (target + offset < count && dashboardModel.get(target + offset).type !== "folder_spacer") {
+                                    target = target + offset;
+                                    break;
+                                }
+                                if (target - offset >= 0 && dashboardModel.get(target - offset).type !== "folder_spacer") {
+                                    target = target - offset;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    currentIndex = target;
                     dashboardView.goToPage(Math.floor(currentIndex / root.itemsPerPage));
                     forceActiveFocus();
                 }
@@ -4049,23 +4217,32 @@ animatedEntrance: true
 
                 delegate: Item {
                     id: dashDelegate
-                    width: dashboardGrid.cellWidth
-                    height: dashboardGrid.cellHeight
-
                     property int itemIndex: index
+                    property bool isSpacer: model.type === "folder_spacer"
                     property bool isFolder: model.type === "folder"
+                    property bool isEnlarged: isFolder && model.enlarged === true
+                    property int parentFolderIndex: model.parentFolderIndex !== undefined ? model.parentFolderIndex : -1
+                    readonly property var folderAppsList: (isFolder && model.apps) ? model.apps : null
+
+                    width: isEnlarged ? dashboardGrid.cellWidth * 2 : dashboardGrid.cellWidth
+                    height: isEnlarged ? dashboardGrid.cellHeight * 2 : dashboardGrid.cellHeight
+                    visible: !isSpacer
+                    z: isEnlarged ? (dashMA.containsMouse || dashboardGrid.currentIndex === itemIndex ? 10 : 5) : 1
+
                     property bool entranceComplete: root.iconEntranceDuration <= 0
-                    Accessible.role: Accessible.Button
+                    Accessible.role: isSpacer ? Accessible.NoRole : Accessible.Button
                     Accessible.name: model.name || ""
-                    Accessible.description: isFolder ? i18n("Folder") : ""
+                    Accessible.description: isFolder ? (isEnlarged ? i18n("Folder (Enlarged)") : i18n("Folder")) : ""
                     Accessible.onPressAction: activate(true)
 
                     function openContextMenu(x, y) {
+                        if (isSpacer) return;
                         dashContextMenu.itemIndex = itemIndex;
                         dashContextMenu.isFolderItem = false;
                         dashContextMenu.appIndex = -1;
                         if (isFolder) {
                             dashContextMenu.isFolder = true;
+                            dashContextMenu.isEnlarged = isEnlarged;
                             dashContextMenu.isAutoItem = false;
                             dashContextMenu.folderIdx = itemIndex;
                             dashContextMenu.desktopFile = "";
@@ -4073,6 +4250,7 @@ animatedEntrance: true
                             dashContextMenu.appIcon = "";
                         } else {
                             dashContextMenu.isFolder = false;
+                            dashContextMenu.isEnlarged = false;
                             dashContextMenu.isAutoItem = (model.type === "auto");
                             dashContextMenu.folderIdx = -1;
                             dashContextMenu.desktopFile = model.desktopFile;
@@ -4088,16 +4266,18 @@ animatedEntrance: true
                     }
 
                     function activate(showKeyboardFocus) {
+                        if (isSpacer) return;
                         if (isFolder) {
-                            var fc = folderPreviewBox.mapToItem(rootItem,
-                                                               folderPreviewBox.width / 2,
-                                                               folderPreviewBox.height / 2);
+                            var originRect = isEnlarged ? enlargedFolderCard : folderPreviewBox;
+                            var fc = originRect.mapToItem(rootItem,
+                                                           originRect.width / 2,
+                                                           originRect.height / 2);
                             var folderIndex = itemIndex;
                             var focusVisible = showKeyboardFocus === true;
                             folderPopup.originX = fc.x;
                             folderPopup.originY = fc.y;
-                            folderPopup.originW = folderPreviewBox.plateSize;
-                            folderPopup.originH = folderPreviewBox.plateSize;
+                            folderPopup.originW = originRect.width;
+                            folderPopup.originH = originRect.height;
                             rootItem.openFolderIndex = folderIndex;
                             Qt.callLater(function() {
                                 if (rootItem.openFolderIndex === folderIndex) {
@@ -4324,9 +4504,9 @@ animatedEntrance: true
                     // only had a hover treatment, so keyboard focus appeared lost.
                     Rectangle {
                         anchors.centerIn: parent
-                        width: root.iconSize + Kirigami.Units.largeSpacing * 2
-                        height: width
-                        radius: width / 4
+                        width: dashDelegate.isEnlarged ? parent.width - 8 : root.iconSize + Kirigami.Units.largeSpacing * 2
+                        height: dashDelegate.isEnlarged ? parent.height - 8 : width
+                        radius: dashDelegate.isEnlarged ? Kirigami.Units.cornerRadius * 2 : width / 4
                         color: colorWithAlpha(Kirigami.Theme.highlightColor, 0.22)
                         border.width: 2
                         border.color: Kirigami.Theme.focusColor
@@ -4341,9 +4521,9 @@ animatedEntrance: true
                     Rectangle {
                         id: mergeHighlight
                         anchors.centerIn: parent
-                        width: root.iconSize + Kirigami.Units.largeSpacing * 2
-                        height: width
-                        radius: width / 4
+                        width: dashDelegate.isEnlarged ? parent.width - 8 : root.iconSize + Kirigami.Units.largeSpacing * 2
+                        height: dashDelegate.isEnlarged ? parent.height - 8 : width
+                        radius: dashDelegate.isEnlarged ? Kirigami.Units.cornerRadius * 2 : width / 4
                         color: Kirigami.Theme.highlightColor
                         // Only the armed (folder-merge) state fills — the plain
                         // "drop here to reorder" hover is shown by dropTargetOutline
@@ -4352,7 +4532,7 @@ animatedEntrance: true
                             if (dashboardGrid.hoverTargetIndex !== dashDelegate.itemIndex) return 0;
                             return dashboardGrid.readyToMerge ? 0.55 : 0;
                         }
-                        scale: dashboardGrid.readyToMerge && dashboardGrid.hoverTargetIndex === dashDelegate.itemIndex ? 1.15 : 1.0
+                        scale: dashboardGrid.readyToMerge && dashboardGrid.hoverTargetIndex === dashDelegate.itemIndex ? (dashDelegate.isEnlarged ? 1.03 : 1.15) : 1.0
                         Behavior on opacity {
                             NumberAnimation { duration: 150; easing.type: Easing.OutCubic }
                         }
@@ -4384,7 +4564,7 @@ animatedEntrance: true
                                 running: mergePulseRing.visible
                                 loops: Animation.Infinite
                                 ParallelAnimation {
-                                    NumberAnimation { target: mergePulseRing; property: "scale"; from: 1.0; to: 1.5; duration: 700; easing.type: Easing.OutCubic }
+                                    NumberAnimation { target: mergePulseRing; property: "scale"; from: 1.0; to: (dashDelegate.isEnlarged ? 1.15 : 1.5); duration: 700; easing.type: Easing.OutCubic }
                                     NumberAnimation { target: mergePulseRing; property: "opacity"; from: 0.6; to: 0.0; duration: 700; easing.type: Easing.OutCubic }
                                 }
                             }
@@ -4397,9 +4577,9 @@ animatedEntrance: true
                     Rectangle {
                         id: dropTargetOutline
                         anchors.centerIn: parent
-                        width: root.iconSize + Kirigami.Units.largeSpacing * 2
-                        height: width
-                        radius: width / 4
+                        width: dashDelegate.isEnlarged ? parent.width - 8 : root.iconSize + Kirigami.Units.largeSpacing * 2
+                        height: dashDelegate.isEnlarged ? parent.height - 8 : width
+                        radius: dashDelegate.isEnlarged ? Kirigami.Units.cornerRadius * 2 : width / 4
                         color: colorWithAlpha(Kirigami.Theme.highlightColor, 0.18)
                         border.width: 2
                         border.color: Kirigami.Theme.highlightColor
@@ -4419,7 +4599,7 @@ animatedEntrance: true
                     // === APP DELEGATE ===
                     Column {
                         id: appContent
-                        visible: !dashDelegate.isFolder
+                        visible: !dashDelegate.isFolder && !dashDelegate.isSpacer
                         anchors.centerIn: parent
                         spacing: 2
                         // Hide whichever delegate currently holds the dragged item
@@ -4449,7 +4629,7 @@ animatedEntrance: true
                     // === FOLDER DELEGATE ===
                     Column {
                         id: folderContent
-                        visible: dashDelegate.isFolder
+                        visible: dashDelegate.isFolder && !dashDelegate.isEnlarged
                         anchors.centerIn: parent
                         spacing: 2
 
@@ -4530,6 +4710,214 @@ animatedEntrance: true
                         }
                     }
 
+                    // === ENLARGED FOLDER DELEGATE (2x2 Grid) ===
+                    Rectangle {
+                        id: enlargedFolderCard
+                        visible: dashDelegate.isEnlarged
+                        anchors.fill: parent
+                        anchors.margins: 4
+                        radius: Kirigami.Units.cornerRadius * 2
+                        color: root.colorWithAlpha(root.bgColor, 0.78)
+                        border.width: 1
+                        border.color: (dashMA.containsMouse || dashboardGrid.currentIndex === dashDelegate.itemIndex)
+                                      ? root.colorWithAlpha(Kirigami.Theme.highlightColor, 0.5)
+                                      : root.colorWithAlpha(Kirigami.Theme.textColor, 0.15)
+
+                        readonly property bool handedToPopup: folderPopup.visible
+                                                              && folderPopup.displayedFolderIndex === dashDelegate.itemIndex
+                        opacity: {
+                            if (dashboardGrid.dragActive && dashboardGrid.dragFromIndex === dashDelegate.itemIndex) return 0.0;
+                            if (handedToPopup) return Math.max(0, 1 - folderPopup.openProgress * 2.5);
+                            return 1.0;
+                        }
+                        Behavior on opacity {
+                            enabled: !enlargedFolderCard.handedToPopup
+                            NumberAnimation { duration: root.hoverEffectDuration }
+                        }
+                        Behavior on border.color {
+                            ColorAnimation { duration: 150 }
+                        }
+
+                        // Header with folder title and open indicator
+                        Item {
+                            id: enlargedHeader
+                            anchors.top: parent.top
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            height: Math.max(22, root.scaledFont(Kirigami.Theme.defaultFont.pointSize + 2, root.dashboardFontScale) + 6)
+                            anchors.topMargin: 6
+                            anchors.leftMargin: 10
+                            anchors.rightMargin: 10
+
+                            RowLayout {
+                                anchors.fill: parent
+                                spacing: Kirigami.Units.smallSpacing
+
+                                PlasmaComponents.Label {
+                                    text: model.name || i18n("Folder")
+                                    font.weight: Font.DemiBold
+                                    font.pointSize: root.scaledFont(Kirigami.Theme.defaultFont.pointSize - 0.5, root.dashboardFontScale)
+                                    elide: Text.ElideRight
+                                    maximumLineCount: 1
+                                    color: Kirigami.Theme.textColor
+                                    opacity: 0.9
+                                    Layout.fillWidth: true
+                                }
+
+                                Kirigami.Icon {
+                                    source: "go-next-symbolic"
+                                    fallback: "arrow-right"
+                                    implicitWidth: 14
+                                    implicitHeight: 14
+                                    opacity: 0.4
+                                    Layout.alignment: Qt.AlignVCenter
+                                }
+                            }
+                        }
+
+                        // 2x2 Grid of applications inside the enlarged folder
+                        Grid {
+                            id: enlargedGrid
+                            anchors.top: enlargedHeader.bottom
+                            anchors.bottom: parent.bottom
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.margins: 6
+                            columns: 2
+                            rows: 2
+                            spacing: 4
+
+                            readonly property int appCount: dashDelegate.folderAppsList ? dashDelegate.folderAppsList.count : 0
+                            readonly property bool hasOverflow: appCount > 4
+                            readonly property int displayCount: Math.min(appCount, 4)
+                            readonly property real slotWidth: Math.max(1, (width - spacing) / 2)
+                            readonly property real slotHeight: Math.max(1, (height - spacing) / 2)
+
+                            Repeater {
+                                model: enlargedGrid.displayCount
+                                delegate: Item {
+                                    id: enlargedAppSlot
+                                    width: enlargedGrid.slotWidth
+                                    height: enlargedGrid.slotHeight
+
+                                    readonly property int subIndex: index
+                                    readonly property bool isOverflowSlot: index === 3 && enlargedGrid.hasOverflow
+                                    readonly property var subApp: (!isOverflowSlot && dashDelegate.folderAppsList && index < dashDelegate.folderAppsList.count) ? dashDelegate.folderAppsList.get(index) : null
+                                    readonly property string slotDesktopFile: subApp ? (subApp.desktopFile || "") : ""
+                                    readonly property string slotName: subApp ? (subApp.name || "") : ""
+                                    readonly property string slotIcon: subApp ? (subApp.icon || "") : ""
+                                    readonly property int overflowRemaining: enlargedGrid.appCount - 3
+
+                                    Rectangle {
+                                        id: slotHoverBg
+                                        anchors.fill: parent
+                                        radius: Kirigami.Units.cornerRadius
+                                        color: root.colorWithAlpha(Kirigami.Theme.highlightColor, slotMA.containsMouse ? 0.22 : 0)
+                                        border.width: slotMA.containsMouse ? 1 : 0
+                                        border.color: root.colorWithAlpha(Kirigami.Theme.highlightColor, 0.4)
+                                        Behavior on color { ColorAnimation { duration: 120 } }
+                                    }
+
+                                    // Regular app slot content
+                                    Column {
+                                        visible: !enlargedAppSlot.isOverflowSlot
+                                        anchors.centerIn: parent
+                                        spacing: 2
+                                        width: parent.width - 4
+
+                                        Kirigami.Icon {
+                                            width: Math.min(enlargedAppSlot.slotHeight * 0.52, root.iconSize * 0.72)
+                                            height: width
+                                            source: enlargedAppSlot.slotIcon
+                                            anchors.horizontalCenter: parent.horizontalCenter
+                                            animated: false
+                                        }
+
+                                        PlasmaComponents.Label {
+                                            text: enlargedAppSlot.slotName
+                                            width: parent.width
+                                            horizontalAlignment: Text.AlignHCenter
+                                            elide: Text.ElideRight
+                                            maximumLineCount: 1
+                                            font.pointSize: root.scaledFont(Kirigami.Theme.defaultFont.pointSize - 2, root.dashboardFontScale)
+                                            anchors.horizontalCenter: parent.horizontalCenter
+                                        }
+                                    }
+
+                                    // Overflow / "More" badge slot content
+                                    Column {
+                                        visible: enlargedAppSlot.isOverflowSlot
+                                        anchors.centerIn: parent
+                                        spacing: 2
+                                        width: parent.width - 4
+
+                                        Rectangle {
+                                            width: Math.min(enlargedAppSlot.slotHeight * 0.52, root.iconSize * 0.72)
+                                            height: width
+                                            radius: width / 2
+                                            anchors.horizontalCenter: parent.horizontalCenter
+                                            color: root.colorWithAlpha(Kirigami.Theme.textColor, 0.15)
+                                            border.width: 1
+                                            border.color: root.colorWithAlpha(Kirigami.Theme.textColor, 0.25)
+
+                                            PlasmaComponents.Label {
+                                                anchors.centerIn: parent
+                                                text: "+" + enlargedAppSlot.overflowRemaining
+                                                font.bold: true
+                                                font.pointSize: root.scaledFont(Kirigami.Theme.defaultFont.pointSize - 0.5, root.dashboardFontScale)
+                                                color: Kirigami.Theme.textColor
+                                            }
+                                        }
+
+                                        PlasmaComponents.Label {
+                                            text: i18n("More…")
+                                            width: parent.width
+                                            horizontalAlignment: Text.AlignHCenter
+                                            elide: Text.ElideRight
+                                            maximumLineCount: 1
+                                            font.pointSize: root.scaledFont(Kirigami.Theme.defaultFont.pointSize - 2, root.dashboardFontScale)
+                                            anchors.horizontalCenter: parent.horizontalCenter
+                                        }
+                                    }
+
+                                    MouseArea {
+                                        id: slotMA
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        acceptedButtons: Qt.LeftButton | Qt.RightButton
+
+                                        onClicked: mouse => {
+                                            if (mouse.button === Qt.RightButton) {
+                                                if (!enlargedAppSlot.isOverflowSlot) {
+                                                    dashContextMenu.itemIndex = dashDelegate.itemIndex;
+                                                    dashContextMenu.isFolder = false;
+                                                    dashContextMenu.isAutoItem = false;
+                                                    dashContextMenu.isFolderItem = true;
+                                                    dashContextMenu.folderIdx = dashDelegate.itemIndex;
+                                                    dashContextMenu.appIndex = enlargedAppSlot.subIndex;
+                                                    dashContextMenu.desktopFile = enlargedAppSlot.slotDesktopFile;
+                                                    dashContextMenu.appName = enlargedAppSlot.slotName;
+                                                    dashContextMenu.appIcon = enlargedAppSlot.slotIcon;
+                                                    dashContextMenu.visualParent = enlargedAppSlot;
+                                                    menuOpenTimer.openMenu(dashContextMenu, mouse.x, mouse.y);
+                                                } else {
+                                                    dashDelegate.openContextMenu(mouse.x, mouse.y);
+                                                }
+                                            } else {
+                                                if (enlargedAppSlot.isOverflowSlot) {
+                                                    dashDelegate.activate(false);
+                                                } else {
+                                                    root.launchAppFromItem(enlargedAppSlot.slotDesktopFile, enlargedAppSlot);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     MouseArea {
                         id: dashMA
                         anchors.fill: parent
@@ -4543,6 +4931,7 @@ animatedEntrance: true
                         property bool dragging: false
 
                         onPressed: mouse => {
+                            if (dashDelegate.isSpacer) return;
                             if (mouse.button === Qt.RightButton) {
                                 dashDelegate.openContextMenu(mouse.x, mouse.y);
                             } else {
@@ -4609,6 +4998,9 @@ animatedEntrance: true
 
                         onPositionChanged: mouse => {
                             if (pressX !== -1 && !dragging) {
+                                if (dashDelegate.isEnlarged || dashDelegate.isSpacer) {
+                                    return;
+                                }
                                 var dx = mouse.x - pressX;
                                 var dy = mouse.y - pressY;
                                 if (dx*dx + dy*dy > 400) {
@@ -4647,10 +5039,24 @@ animatedEntrance: true
                                 var overItem = dashboardGrid.itemAtIndex(overIdx);
                                 if (!overItem) return;
 
+                                var targetIdx = (overItem.isSpacer && overItem.parentFolderIndex >= 0) ? overItem.parentFolderIndex : overIdx;
+                                var targetItem = (targetIdx !== overIdx) ? dashboardGrid.itemAtIndex(targetIdx) : overItem;
+
+                                if (targetIdx === fromIdx) {
+                                    dashboardGrid.hoverTargetIndex = -1;
+                                    dashboardGrid.readyToMerge = false;
+                                    folderMergeTimer.stop();
+                                    return;
+                                }
+
                                 // Cursor position within the hovered cell (0..1)
                                 var relX = (mapped.x - overItem.x) / dashboardGrid.cellWidth;
                                 var relY = (mapped.y - overItem.y) / dashboardGrid.cellHeight;
                                 var inCenter = relX > 0.15 && relX < 0.85 && relY > 0.15 && relY < 0.85;
+
+                                if (targetItem && targetItem.isEnlarged) {
+                                    inCenter = true;
+                                }
 
                                 var overCx = overItem.x + dashboardGrid.cellWidth / 2;
                                 var overCy = overItem.y + dashboardGrid.cellHeight / 2;
@@ -4667,10 +5073,10 @@ animatedEntrance: true
                                 if (inCenter) {
                                     // Dwelling on the icon → offer a folder merge;
                                     // the target stays stable so the user can easily drop onto it.
-                                    if (dashboardGrid.hoverTargetIndex !== overIdx) {
-                                        dashboardGrid.hoverTargetIndex = overIdx;
+                                    if (dashboardGrid.hoverTargetIndex !== targetIdx) {
+                                        dashboardGrid.hoverTargetIndex = targetIdx;
                                         dashboardGrid.readyToMerge = false;
-                                        folderMergeTimer.targetIndex = overIdx;
+                                        folderMergeTimer.targetIndex = targetIdx;
                                         folderMergeTimer.restart();
                                     }
                                 } else {
@@ -4679,7 +5085,7 @@ animatedEntrance: true
                                     dashboardGrid.readyToMerge = false;
                                     folderMergeTimer.stop();
 
-                                    if (crossed) {
+                                    if (crossed && !overItem.isSpacer && !overItem.isEnlarged) {
                                         // Passed the icon into the gap/edge → slide it aside to preview reorder
                                         dashboardModel.move(fromIdx, overIdx, 1);
                                         dashboardGrid.dragFromIndex = overIdx;

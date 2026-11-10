@@ -397,3 +397,19 @@ msgstr ""
 #: package/contents/ui/DashboardRepresentation.qml
 msgid "Uninstall or Manage Add-Ons…"
 msgstr ""
+
+#: package/contents/ui/DashboardRepresentation.qml
+msgid "Enlarge Folder"
+msgstr ""
+
+#: package/contents/ui/DashboardRepresentation.qml
+msgid "Shrink Folder"
+msgstr ""
+
+#: package/contents/ui/DashboardRepresentation.qml
+msgid "Folder (Enlarged)"
+msgstr ""
+
+#: package/contents/ui/DashboardRepresentation.qml
+msgid "More…"
+msgstr ""

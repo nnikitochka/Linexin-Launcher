@@ -293,3 +293,15 @@ msgstr "Modifier l'application…"
 
 msgid "Uninstall or Manage Add-Ons…"
 msgstr "Désinstaller ou gérer les extensions…"
+
+msgid "Enlarge Folder"
+msgstr ""
+
+msgid "Shrink Folder"
+msgstr ""
+
+msgid "Folder (Enlarged)"
+msgstr ""
+
+msgid "More…"
+msgstr ""
